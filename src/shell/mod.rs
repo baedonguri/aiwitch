@@ -140,8 +140,15 @@ pub fn init_snippet(shell: Shell) -> &'static str {
 
 const POSIX_INIT: &str = r#"aiwitch() {
   case "$1" in
-    use) eval "$(command aiwitch env "$2")" ;;
-    *)   command aiwitch "$@" ;;
+    use)
+      shift
+      __aiwitch_env="$(command aiwitch env "$@")" || return $?
+      eval "$__aiwitch_env"
+      unset __aiwitch_env
+      ;;
+    *)
+      command aiwitch "$@"
+      ;;
   esac
 }
 "#;
@@ -149,7 +156,8 @@ const POSIX_INIT: &str = r#"aiwitch() {
 const FISH_INIT: &str = r#"function aiwitch
   switch $argv[1]
     case use
-      command aiwitch env --shell=fish $argv[2] | source
+      set -l __aiwitch_env (command aiwitch env --shell=fish $argv[2..]); or return $status
+      printf '%s\n' $__aiwitch_env | source
     case '*'
       command aiwitch $argv
   end
@@ -439,8 +447,16 @@ mod tests {
     fn init_snippet_posix_has_use_alias() {
         let s = init_snippet(Shell::Zsh);
         assert!(s.contains("aiwitch()"));
-        assert!(s.contains("eval \"$(command aiwitch env"));
+        assert!(s.contains("command aiwitch env"));
         assert_eq!(init_snippet(Shell::Bash), s);
+    }
+
+    #[test]
+    fn init_snippet_posix_propagates_failure_and_forwards_args() {
+        let s = init_snippet(Shell::Zsh);
+        assert!(s.contains("|| return $?"), "must propagate exit status");
+        assert!(s.contains("\"$@\""), "must forward all remaining args after shift");
+        assert!(s.contains("shift"));
     }
 
     #[test]
@@ -448,6 +464,13 @@ mod tests {
         let s = init_snippet(Shell::Fish);
         assert!(s.contains("function aiwitch"));
         assert!(s.contains("command aiwitch env --shell=fish"));
-        assert!(s.contains("| source"));
+        assert!(s.contains("| source") || s.contains("|source"));
+    }
+
+    #[test]
+    fn init_snippet_fish_propagates_failure_and_forwards_args() {
+        let s = init_snippet(Shell::Fish);
+        assert!(s.contains("or return $status"), "must propagate exit status");
+        assert!(s.contains("$argv[2..]"), "must forward all remaining args");
     }
 }

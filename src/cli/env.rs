@@ -18,8 +18,12 @@ pub fn run(profile_name: &str, format: EnvFormat) -> Result<()> {
 
 /** Pure renderer used by tests and by `run`. Returns the full snippet as a String;
  *  no I/O. On any error (unknown name, bad key/value) returns Err and the caller
- *  must not write anything to stdout. */
+ *  must not write anything to stdout.
+ *
+ *  Re-validates the profile name even though `run` already does so — defensive in
+ *  case future callers (e.g. an `import` command) reach this directly. */
 pub fn render(profiles: &ProfilesFile, name: &str, format: EnvFormat) -> Result<String> {
+    validate_profile_name(name)?;
     let profile = profiles.find_by_name(name)?;
     let backend = AnyBackend::from_kind(profile.backend);
     let mut pairs = backend.env_exports(profile)?;
@@ -97,5 +101,12 @@ mod tests {
         assert_eq!(lines.len(), 2);
         assert!(lines[0].starts_with("export CODEX_HOME="));
         assert!(lines[1].starts_with("export AIWITCH_CURRENT="));
+    }
+
+    #[test]
+    fn render_rejects_invalid_profile_name_defensively() {
+        assert!(render(&pf(), "with.dot", EnvFormat::Posix).is_err());
+        assert!(render(&pf(), "-leading", EnvFormat::Posix).is_err());
+        assert!(render(&pf(), "", EnvFormat::Posix).is_err());
     }
 }
