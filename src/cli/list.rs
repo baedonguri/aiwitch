@@ -1,10 +1,14 @@
 use crate::backend::{AnyBackend, Backend, BackendKind, ProfileMeta};
+use crate::cli::current::{AIWITCH_CURRENT_KEY, EnvLookup, SystemEnv};
 use crate::error::Result;
-use crate::profile::{store, Profile};
+use crate::profile::{Profile, ProfilesFile, store};
 use std::io::Write;
+
+const CURRENT_MARK: &str = "*";
 
 pub fn run() -> Result<()> {
     let profiles = store::load()?;
+    let current = current_profiles(&SystemEnv, &profiles);
     let rows: Vec<(Profile, ProfileMeta)> = profiles
         .profiles
         .into_iter()
@@ -15,16 +19,51 @@ pub fn run() -> Result<()> {
             (p, meta)
         })
         .collect();
-    let table = render(&rows);
+    let table = render(&rows, &current);
     let stdout = std::io::stdout();
     let mut handle = stdout.lock();
     handle.write_all(table.as_bytes())?;
     Ok(())
 }
 
+fn current_profiles<E: EnvLookup>(env: &E, profiles: &ProfilesFile) -> Vec<String> {
+    let mut selected = Vec::new();
+    let mut selected_backends = Vec::new();
+
+    if let Some(name) = env.get(AIWITCH_CURRENT_KEY) {
+        if let Some(profile) = profiles.profiles.iter().find(|p| p.name == name) {
+            selected.push(profile.name.clone());
+            selected_backends.push(profile.backend);
+        }
+    }
+
+    for profile in &profiles.profiles {
+        if selected_backends.contains(&profile.backend) {
+            continue;
+        }
+
+        let exports = AnyBackend::from_kind(profile.backend)
+            .env_exports(profile)
+            .unwrap_or_default();
+        if exports.is_empty() {
+            continue;
+        }
+
+        let matches = exports
+            .iter()
+            .all(|(key, value)| env.get(key).as_deref() == Some(value.as_str()));
+        if matches {
+            selected.push(profile.name.clone());
+            selected_backends.push(profile.backend);
+        }
+    }
+
+    selected
+}
+
 /** Pure renderer. Empty profiles -> header-only + hint line. */
-pub fn render(rows: &[(Profile, ProfileMeta)]) -> String {
-    let header = ["NAME", "BACKEND", "EMAIL", "PLAN", "EXPIRES"];
+pub fn render(rows: &[(Profile, ProfileMeta)], current: &[String]) -> String {
+    let header = ["NAME", "BACKEND", "EMAIL", "PLAN", "EXPIRES", "CURRENT"];
     if rows.is_empty() {
         return format!(
             "{}\n(no profiles configured — see ~/.config/aiwitch/profiles.toml)\n",
@@ -32,7 +71,7 @@ pub fn render(rows: &[(Profile, ProfileMeta)]) -> String {
         );
     }
 
-    let cells: Vec<[String; 5]> = rows
+    let cells: Vec<[String; 6]> = rows
         .iter()
         .map(|(profile, meta)| {
             [
@@ -43,6 +82,11 @@ pub fn render(rows: &[(Profile, ProfileMeta)]) -> String {
                 meta.subscription_until
                     .map(|dt| dt.format("%Y-%m-%d").to_string())
                     .unwrap_or_else(|| "-".to_string()),
+                if current.iter().any(|name| name == &profile.name) {
+                    CURRENT_MARK.to_string()
+                } else {
+                    String::new()
+                },
             ]
         })
         .collect();
@@ -70,7 +114,7 @@ fn backend_label(kind: BackendKind) -> &'static str {
     }
 }
 
-fn push_row(out: &mut String, row: &[String; 5], widths: &[usize; 5]) {
+fn push_row<const N: usize>(out: &mut String, row: &[String; N], widths: &[usize; N]) {
     for (i, cell) in row.iter().enumerate() {
         if i > 0 {
             out.push_str(" | ");
@@ -87,8 +131,9 @@ fn push_row(out: &mut String, row: &[String; 5], widths: &[usize; 5]) {
 mod tests {
     use super::*;
     use crate::backend::{BackendKind, ProfileMeta};
-    use crate::profile::Profile;
+    use crate::profile::{Profile, ProfilesFile};
     use chrono::{DateTime, Utc};
+    use std::collections::HashMap;
     use std::path::PathBuf;
 
     fn profile(name: &str) -> Profile {
@@ -103,11 +148,24 @@ mod tests {
         DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&Utc)
     }
 
+    fn env_map(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    fn profiles(names: &[&str]) -> ProfilesFile {
+        ProfilesFile {
+            profiles: names.iter().map(|name| profile(name)).collect(),
+        }
+    }
+
     #[test]
     fn render_empty_profiles_shows_hint() {
         assert_eq!(
-            render(&[]),
-            "NAME | BACKEND | EMAIL | PLAN | EXPIRES\n(no profiles configured — see ~/.config/aiwitch/profiles.toml)\n"
+            render(&[], &[]),
+            "NAME | BACKEND | EMAIL | PLAN | EXPIRES | CURRENT\n(no profiles configured — see ~/.config/aiwitch/profiles.toml)\n"
         );
     }
 
@@ -123,10 +181,26 @@ mod tests {
         )];
 
         assert_eq!(
-            render(&rows),
-            "NAME     | BACKEND | EMAIL   | PLAN | EXPIRES\n\
-             --------+-------+-------+----+----------\n\
-             personal | codex   | a@b.com | plus | 2026-05-05\n"
+            render(&rows, &[]),
+            "NAME     | BACKEND | EMAIL   | PLAN | EXPIRES    | CURRENT\n\
+             --------+-------+-------+----+----------+-------\n\
+             personal | codex   | a@b.com | plus | 2026-05-05 | \n"
+        );
+    }
+
+    #[test]
+    fn render_current_marker_after_expires() {
+        let rows = [
+            (profile("personal"), ProfileMeta::default()),
+            (profile("work"), ProfileMeta::default()),
+        ];
+
+        assert_eq!(
+            render(&rows, &["work".to_string()]),
+            "NAME     | BACKEND | EMAIL | PLAN | EXPIRES | CURRENT\n\
+             --------+-------+-----+----+-------+-------\n\
+             personal | codex   | -     | -    | -       | \n\
+             work     | codex   | -     | -    | -       | *\n"
         );
     }
 
@@ -135,10 +209,10 @@ mod tests {
         let rows = [(profile("personal"), ProfileMeta::default())];
 
         assert_eq!(
-            render(&rows),
-            "NAME     | BACKEND | EMAIL | PLAN | EXPIRES\n\
-             --------+-------+-----+----+-------\n\
-             personal | codex   | -     | -    | -\n"
+            render(&rows, &[]),
+            "NAME     | BACKEND | EMAIL | PLAN | EXPIRES | CURRENT\n\
+             --------+-------+-----+----+-------+-------\n\
+             personal | codex   | -     | -    | -       | \n"
         );
     }
 
@@ -150,11 +224,11 @@ mod tests {
         ];
 
         assert_eq!(
-            render(&rows),
-            "NAME      | BACKEND | EMAIL | PLAN | EXPIRES\n\
-             ---------+-------+-----+----+-------\n\
-             p         | codex   | -     | -    | -\n\
-             long-name | codex   | -     | -    | -\n"
+            render(&rows, &[]),
+            "NAME      | BACKEND | EMAIL | PLAN | EXPIRES | CURRENT\n\
+             ---------+-------+-----+----+-------+-------\n\
+             p         | codex   | -     | -    | -       | \n\
+             long-name | codex   | -     | -    | -       | \n"
         );
     }
 
@@ -168,9 +242,49 @@ mod tests {
             },
         )];
 
-        let got = render(&rows);
+        let got = render(&rows, &[]);
 
         assert!(got.contains("2026-12-31"));
         assert!(!got.contains("23:59:59"));
+    }
+
+    #[test]
+    fn current_profiles_uses_aiwitch_current_when_valid() {
+        let env = env_map(&[("AIWITCH_CURRENT", "work")]);
+
+        assert_eq!(
+            current_profiles(&env, &profiles(&["personal", "work"])),
+            vec!["work".to_string()]
+        );
+    }
+
+    #[test]
+    fn current_profiles_ignores_aiwitch_current_not_in_profiles() {
+        let env = env_map(&[("AIWITCH_CURRENT", "ghost")]);
+
+        assert_eq!(
+            current_profiles(&env, &profiles(&["personal"])),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn current_profiles_falls_back_to_codex_home_match() {
+        let env = env_map(&[("CODEX_HOME", "/abs/work")]);
+
+        assert_eq!(
+            current_profiles(&env, &profiles(&["personal", "work"])),
+            vec!["work".to_string()]
+        );
+    }
+
+    #[test]
+    fn current_profiles_uses_one_marker_per_backend() {
+        let env = env_map(&[("AIWITCH_CURRENT", "personal"), ("CODEX_HOME", "/abs/work")]);
+
+        assert_eq!(
+            current_profiles(&env, &profiles(&["personal", "work"])),
+            vec!["personal".to_string()]
+        );
     }
 }

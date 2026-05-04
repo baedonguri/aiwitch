@@ -1,10 +1,9 @@
 use crate::backend::{AnyBackend, Backend};
+use crate::cli::current::AIWITCH_CURRENT_KEY;
 use crate::error::Result;
 use crate::profile::{ProfilesFile, store};
 use crate::shell::{EnvFormat, render_env, validate_profile_name};
 use std::io::Write;
-
-const AIWITCH_CURRENT_KEY: &str = "AIWITCH_CURRENT";
 
 pub fn run(profile_name: &str, format: EnvFormat) -> Result<()> {
     validate_profile_name(profile_name)?;

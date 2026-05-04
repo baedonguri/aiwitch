@@ -4,7 +4,7 @@ use crate::profile::{ProfilesFile, store};
 use crate::shell::validate_profile_name;
 use std::collections::HashMap;
 
-const AIWITCH_CURRENT_KEY: &str = "AIWITCH_CURRENT";
+pub(crate) const AIWITCH_CURRENT_KEY: &str = "AIWITCH_CURRENT";
 const UNMANAGED: &str = "(unmanaged)";
 
 /** Read-only view over the process environment so tests can inject a fake. */
@@ -12,7 +12,7 @@ pub trait EnvLookup {
     fn get(&self, key: &str) -> Option<String>;
 }
 
-struct SystemEnv;
+pub(crate) struct SystemEnv;
 impl EnvLookup for SystemEnv {
     fn get(&self, key: &str) -> Option<String> {
         std::env::var(key).ok()
