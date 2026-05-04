@@ -1,5 +1,5 @@
 use super::{Backend, BackendKind, ProfileMeta};
-use crate::error::{Result, Context};
+use crate::error::{Context, Result};
 use crate::profile::Profile;
 use anyhow::ensure;
 
@@ -38,8 +38,26 @@ impl Backend for CodexBackend {
         Ok(vec![("CODEX_HOME".to_string(), home)])
     }
 
-    fn read_meta(&self, _profile: &Profile) -> Result<ProfileMeta> {
-        todo!("parse auth.json and decode id_token")
+    fn read_meta(&self, profile: &Profile) -> Result<ProfileMeta> {
+        ensure!(
+            profile.backend == BackendKind::Codex,
+            "CodexBackend received non-codex profile {:?}",
+            profile.name
+        );
+        let auth_file = auth::read(&profile.home_dir)?;
+        let Some(tokens) = auth_file.tokens else {
+            return Ok(ProfileMeta::default());
+        };
+        let payload = jwt::decode_payload(&tokens.id_token)?;
+        let (plan, subscription_until) = payload
+            .openai_auth
+            .map(|a| (a.chatgpt_plan_type, a.chatgpt_subscription_active_until))
+            .unwrap_or((None, None));
+        Ok(ProfileMeta {
+            email: payload.email,
+            plan,
+            subscription_until,
+        })
     }
 }
 
@@ -89,5 +107,46 @@ mod tests {
         let exports = CodexBackend.env_exports(&p).unwrap();
         assert_eq!(exports.len(), 1);
         assert_eq!(exports[0].0, "CODEX_HOME");
+    }
+
+    #[test]
+    fn read_meta_tokens_none_returns_default_meta() {
+        let tmp = tempdir();
+        std::fs::write(
+            tmp.path().join("auth.json"),
+            r#"{"auth_mode":"ApiKey","tokens":null}"#,
+        )
+        .unwrap();
+        let p = profile("p", tmp.path().to_str().unwrap());
+
+        let meta = CodexBackend.read_meta(&p).unwrap();
+
+        assert!(meta.email.is_none());
+        assert!(meta.plan.is_none());
+        assert!(meta.subscription_until.is_none());
+    }
+
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn path(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn tempdir() -> TempDir {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static N: AtomicU64 = AtomicU64::new(0);
+        let n = N.fetch_add(1, Ordering::Relaxed);
+        let pid = std::process::id();
+        let dir = std::env::temp_dir().join(format!("aiwitch-codex-test-{pid}-{n}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        TempDir(dir)
     }
 }
