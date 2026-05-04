@@ -1,13 +1,18 @@
 use crate::error::Result;
 use clap::{Parser, Subcommand};
 
+mod add;
 mod current;
 mod env;
 mod list;
 mod shell;
 
 #[derive(Parser, Debug)]
-#[command(name = "aiwitch", version, about = "Switch between AI CLI accounts/profiles")]
+#[command(
+    name = "aiwitch",
+    version,
+    about = "Switch between AI CLI accounts/profiles"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -15,6 +20,12 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Command {
+    /** Add a Codex profile. */
+    Add {
+        profile: String,
+        #[arg(long = "home")]
+        home: Option<std::path::PathBuf>,
+    },
     /** List profiles with email, plan, and expiry. */
     List,
     /** Print the active profile name. */
@@ -68,6 +79,7 @@ impl From<EnvShell> for crate::shell::EnvFormat {
 pub fn run() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
+        Command::Add { profile, home } => add::run(&profile, home.as_deref()),
         Command::List => list::run(),
         Command::Current => current::run(),
         Command::Env { profile, shell } => env::run(&profile, shell.into()),
