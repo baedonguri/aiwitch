@@ -20,6 +20,12 @@ pub struct Tokens {
     pub account_id: Option<String>,
 }
 
+impl AuthFile {
+    pub fn has_api_key(&self) -> bool {
+        self.auth_mode.eq_ignore_ascii_case("apikey") && self.openai_api_key.is_some()
+    }
+}
+
 /** Reads $CODEX_HOME/auth.json. File-backend only (keyring is v0.1.1+). */
 pub fn read(codex_home: &Path) -> Result<AuthFile> {
     let path = codex_home.join("auth.json");
@@ -75,6 +81,21 @@ mod tests {
 
         assert_eq!(auth.auth_mode, "ApiKey");
         assert_eq!(auth.openai_api_key.as_deref(), Some("sk-test"));
+        assert!(auth.has_api_key());
+        assert!(auth.tokens.is_none());
+    }
+
+    #[test]
+    fn parse_apikey_mode_matches_codex_cli_casing() {
+        let auth = parse(
+            r#"{
+                "auth_mode": "apikey",
+                "OPENAI_API_KEY": "sk-test"
+            }"#,
+        )
+        .unwrap();
+
+        assert!(auth.has_api_key());
         assert!(auth.tokens.is_none());
     }
 

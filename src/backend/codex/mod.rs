@@ -1,4 +1,4 @@
-use super::{Backend, BackendKind, ProfileMeta};
+use super::{Backend, BackendKind, ProfileMeta, ProviderCommand};
 use crate::error::{Context, Result};
 use crate::profile::Profile;
 use anyhow::ensure;
@@ -7,6 +7,29 @@ pub mod auth;
 pub mod jwt;
 
 pub struct CodexBackend;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CodexLoginMode {
+    Chatgpt,
+    ApiKey,
+}
+
+pub fn login_command(profile: &Profile, mode: CodexLoginMode) -> Result<ProviderCommand> {
+    let mut args = vec![
+        "-c".to_string(),
+        "cli_auth_credentials_store=\"file\"".to_string(),
+        "login".to_string(),
+    ];
+    if mode == CodexLoginMode::ApiKey {
+        args.push("--with-api-key".to_string());
+    }
+
+    Ok(ProviderCommand {
+        program: "codex".to_string(),
+        args,
+        envs: CodexBackend.env_exports(profile)?,
+    })
+}
 
 impl Backend for CodexBackend {
     fn id(&self) -> BackendKind {
@@ -45,6 +68,12 @@ impl Backend for CodexBackend {
             profile.name
         );
         let auth_file = auth::read(&profile.home_dir)?;
+        if auth_file.has_api_key() {
+            return Ok(ProfileMeta {
+                plan: Some("api-key".to_string()),
+                ..ProfileMeta::default()
+            });
+        }
         let Some(tokens) = auth_file.tokens else {
             return Ok(ProfileMeta::default());
         };
@@ -110,11 +139,11 @@ mod tests {
     }
 
     #[test]
-    fn read_meta_tokens_none_returns_default_meta() {
+    fn read_meta_chatgpt_tokens_none_returns_default_meta() {
         let tmp = tempdir();
         std::fs::write(
             tmp.path().join("auth.json"),
-            r#"{"auth_mode":"ApiKey","tokens":null}"#,
+            r#"{"auth_mode":"ChatGPT","tokens":null}"#,
         )
         .unwrap();
         let p = profile("p", tmp.path().to_str().unwrap());
@@ -124,6 +153,61 @@ mod tests {
         assert!(meta.email.is_none());
         assert!(meta.plan.is_none());
         assert!(meta.subscription_until.is_none());
+    }
+
+    #[test]
+    fn read_meta_apikey_mode_returns_api_key_plan() {
+        let tmp = tempdir();
+        std::fs::write(
+            tmp.path().join("auth.json"),
+            r#"{"auth_mode":"apikey","OPENAI_API_KEY":"sk-test"}"#,
+        )
+        .unwrap();
+        let p = profile("p", tmp.path().to_str().unwrap());
+
+        let meta = CodexBackend.read_meta(&p).unwrap();
+
+        assert!(meta.email.is_none());
+        assert_eq!(meta.plan.as_deref(), Some("api-key"));
+        assert!(meta.subscription_until.is_none());
+    }
+
+    #[test]
+    fn login_command_uses_codex_home_for_chatgpt_login() {
+        let p = profile("p", "/abs/codex");
+
+        let command = login_command(&p, CodexLoginMode::Chatgpt).unwrap();
+
+        assert_eq!(command.program, "codex");
+        assert_eq!(
+            command.args,
+            vec![
+                "-c".to_string(),
+                "cli_auth_credentials_store=\"file\"".to_string(),
+                "login".to_string()
+            ]
+        );
+        assert_eq!(
+            command.envs,
+            vec![("CODEX_HOME".to_string(), "/abs/codex".to_string())]
+        );
+    }
+
+    #[test]
+    fn login_command_adds_api_key_flag() {
+        let p = profile("p", "/abs/codex");
+
+        let command = login_command(&p, CodexLoginMode::ApiKey).unwrap();
+
+        assert_eq!(
+            command.args,
+            vec![
+                "-c".to_string(),
+                "cli_auth_credentials_store=\"file\"".to_string(),
+                "login".to_string(),
+                "--with-api-key".to_string()
+            ]
+        );
     }
 
     struct TempDir(PathBuf);

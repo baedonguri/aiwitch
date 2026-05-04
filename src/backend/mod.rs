@@ -18,6 +18,13 @@ pub struct ProfileMeta {
     pub subscription_until: Option<DateTime<Utc>>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderCommand {
+    pub program: String,
+    pub args: Vec<String>,
+    pub envs: Vec<(String, String)>,
+}
+
 pub trait Backend {
     fn id(&self) -> BackendKind;
 

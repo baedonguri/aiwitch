@@ -3,14 +3,15 @@ use crate::error::{Context, Result};
 use crate::profile::{Profile, ProfilesFile, store};
 use crate::shell::validate_profile_name;
 use anyhow::{anyhow, ensure};
+use clap::ValueEnum;
 use std::collections::HashSet;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-pub fn run(profile: &str, home: Option<&Path>) -> Result<()> {
+pub fn run(profile: &str, home: Option<&Path>, auth: Option<CodexAuthMode>) -> Result<()> {
     let config_path = store::config_path()?;
     let home_base = store::expand_home_dir(Path::new("~"))?;
-    let outcome = add_to_config(&config_path, &home_base, profile, home)?;
+    let outcome = add_to_config_with_auth(&config_path, &home_base, profile, home, auth)?;
 
     let mut stdout = std::io::stdout().lock();
     writeln!(stdout, "added profile {}", outcome.profile)?;
@@ -25,7 +26,25 @@ pub fn run(profile: &str, home: Option<&Path>) -> Result<()> {
         "switch: eval \"$(aiwitch env {})\"",
         outcome.profile
     )?;
+    if let Some(auth) = outcome.auth {
+        writeln!(stdout, "auth: {}", auth.config_value())?;
+    }
     Ok(())
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub enum CodexAuthMode {
+    Chatgpt,
+    Api,
+}
+
+impl CodexAuthMode {
+    fn config_value(self) -> &'static str {
+        match self {
+            CodexAuthMode::Chatgpt => "chatgpt",
+            CodexAuthMode::Api => "api",
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -33,13 +52,15 @@ struct AddOutcome {
     profile: String,
     home_dir: String,
     expanded_home: PathBuf,
+    auth: Option<CodexAuthMode>,
 }
 
-fn add_to_config(
+fn add_to_config_with_auth(
     config_path: &Path,
     home_base: &Path,
     profile: &str,
     home: Option<&Path>,
+    auth: Option<CodexAuthMode>,
 ) -> Result<AddOutcome> {
     let home_dir = match home {
         Some(path) => path
@@ -67,6 +88,9 @@ fn add_to_config(
     let expanded_home = store::expand_home_dir_in(Path::new(&home_dir), home_base)?;
     std::fs::create_dir_all(&expanded_home)
         .with_context(|| format!("failed to create {}", expanded_home.display()))?;
+    if let Some(auth) = auth {
+        write_codex_auth_config(&expanded_home, auth)?;
+    }
     std::fs::write(config_path, updated)
         .with_context(|| format!("failed to write {}", config_path.display()))?;
 
@@ -74,7 +98,85 @@ fn add_to_config(
         profile: profile.to_string(),
         home_dir,
         expanded_home,
+        auth,
     })
+}
+
+fn write_codex_auth_config(codex_home: &Path, auth: CodexAuthMode) -> Result<()> {
+    std::fs::create_dir_all(codex_home)
+        .with_context(|| format!("failed to create {}", codex_home.display()))?;
+    let path = codex_home.join("config.toml");
+    let existing = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => {
+            return Err(anyhow::Error::new(e).context(format!("failed to read {}", path.display())));
+        }
+    };
+
+    let mut prefix = String::new();
+    if !has_root_toml_key(&existing, "forced_login_method") {
+        prefix.push_str(&format!(
+            "forced_login_method = \"{}\"\n",
+            auth.config_value()
+        ));
+    }
+    if !has_root_toml_key(&existing, "cli_auth_credentials_store") {
+        prefix.push_str("cli_auth_credentials_store = \"file\"\n");
+    }
+
+    let updated = insert_root_toml_keys(prefix, existing);
+    std::fs::write(&path, updated).with_context(|| format!("failed to write {}", path.display()))
+}
+
+fn has_root_toml_key(text: &str, key: &str) -> bool {
+    for line in text.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with('[') {
+            return false;
+        }
+        if !trimmed.starts_with('#')
+            && trimmed
+                .strip_prefix(key)
+                .is_some_and(|rest| rest.trim_start().starts_with('='))
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn insert_root_toml_keys(prefix: String, existing: String) -> String {
+    if prefix.is_empty() {
+        return existing;
+    }
+    if existing.is_empty() {
+        return prefix;
+    }
+    let Some(table_start) = first_toml_table_start(&existing) else {
+        let separator = if existing.ends_with('\n') { "" } else { "\n" };
+        return format!("{existing}{separator}{prefix}");
+    };
+
+    let (root, tables) = existing.split_at(table_start);
+    if root.is_empty() {
+        format!("{prefix}\n{tables}")
+    } else if root.ends_with('\n') {
+        format!("{root}{prefix}\n{tables}")
+    } else {
+        format!("{root}\n{prefix}\n{tables}")
+    }
+}
+
+fn first_toml_table_start(text: &str) -> Option<usize> {
+    let mut offset = 0;
+    for line in text.split_inclusive('\n') {
+        if line.trim_start().starts_with('[') {
+            return Some(offset);
+        }
+        offset += line.len();
+    }
+    None
 }
 
 fn default_home(profile: &str) -> String {
@@ -222,7 +324,8 @@ mod tests {
     fn add_to_config_creates_config_and_home_dir() {
         let tmp = tempdir();
         let config = tmp.path().join(".config/aiwitch/profiles.toml");
-        let outcome = add_to_config(&config, tmp.path(), "codex_lemon", None).unwrap();
+        let outcome =
+            add_to_config_with_auth(&config, tmp.path(), "codex_lemon", None, None).unwrap();
 
         assert_eq!(outcome.profile, "codex_lemon");
         assert_eq!(outcome.home_dir, "~/.codex-codex_lemon");
@@ -245,11 +348,12 @@ mod tests {
         )
         .unwrap();
 
-        let outcome = add_to_config(
+        let outcome = add_to_config_with_auth(
             &config,
             tmp.path(),
             "lemon",
             Some(Path::new("~/.codex-lemon")),
+            None,
         )
         .unwrap();
 
@@ -272,16 +376,108 @@ mod tests {
         )
         .unwrap();
 
-        let err = add_to_config(
+        let err = add_to_config_with_auth(
             &config,
             tmp.path(),
             "lemon",
             Some(Path::new("~/.codex-other")),
+            None,
         )
         .unwrap_err();
 
         assert!(format!("{err}").contains("duplicate"));
         assert!(!tmp.path().join(".codex-other").exists());
+    }
+
+    #[test]
+    fn add_to_config_with_api_auth_writes_codex_config() {
+        let tmp = tempdir();
+        let config = tmp.path().join(".config/aiwitch/profiles.toml");
+
+        let outcome = add_to_config_with_auth(
+            &config,
+            tmp.path(),
+            "codex_api",
+            None,
+            Some(CodexAuthMode::Api),
+        )
+        .unwrap();
+
+        assert_eq!(outcome.expanded_home, tmp.path().join(".codex-codex_api"));
+        assert_eq!(
+            std::fs::read_to_string(outcome.expanded_home.join("config.toml")).unwrap(),
+            "forced_login_method = \"api\"\ncli_auth_credentials_store = \"file\"\n"
+        );
+    }
+
+    #[test]
+    fn add_to_config_with_chatgpt_auth_writes_codex_config() {
+        let tmp = tempdir();
+        let config = tmp.path().join(".config/aiwitch/profiles.toml");
+
+        let outcome = add_to_config_with_auth(
+            &config,
+            tmp.path(),
+            "codex_chat",
+            None,
+            Some(CodexAuthMode::Chatgpt),
+        )
+        .unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(outcome.expanded_home.join("config.toml")).unwrap(),
+            "forced_login_method = \"chatgpt\"\ncli_auth_credentials_store = \"file\"\n"
+        );
+    }
+
+    #[test]
+    fn codex_auth_config_preserves_existing_keys() {
+        let tmp = tempdir();
+        let config = tmp.path().join("config.toml");
+        std::fs::write(
+            &config,
+            "model = \"gpt-5.5\"\nforced_login_method = \"api\"\n",
+        )
+        .unwrap();
+
+        write_codex_auth_config(tmp.path(), CodexAuthMode::Chatgpt).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(config).unwrap(),
+            "model = \"gpt-5.5\"\nforced_login_method = \"api\"\ncli_auth_credentials_store = \"file\"\n"
+        );
+    }
+
+    #[test]
+    fn codex_auth_config_inserts_missing_root_keys_before_tables() {
+        let tmp = tempdir();
+        let config = tmp.path().join("config.toml");
+        std::fs::write(&config, "[mcp_servers.foo]\ncommand = \"foo\"\n").unwrap();
+
+        write_codex_auth_config(tmp.path(), CodexAuthMode::Api).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(config).unwrap(),
+            "forced_login_method = \"api\"\ncli_auth_credentials_store = \"file\"\n\n[mcp_servers.foo]\ncommand = \"foo\"\n"
+        );
+    }
+
+    #[test]
+    fn codex_auth_config_ignores_same_named_keys_inside_tables() {
+        let tmp = tempdir();
+        let config = tmp.path().join("config.toml");
+        std::fs::write(
+            &config,
+            "[mcp_servers.foo]\nforced_login_method = \"chatgpt\"\n",
+        )
+        .unwrap();
+
+        write_codex_auth_config(tmp.path(), CodexAuthMode::Api).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(config).unwrap(),
+            "forced_login_method = \"api\"\ncli_auth_credentials_store = \"file\"\n\n[mcp_servers.foo]\nforced_login_method = \"chatgpt\"\n"
+        );
     }
 
     struct TempDir(PathBuf);
