@@ -140,6 +140,13 @@ pub fn init_snippet(shell: Shell) -> &'static str {
 
 const POSIX_INIT: &str = r#"aiwitch() {
   case "$1" in
+    add)
+      shift
+      __aiwitch_env="$(command aiwitch add --print-env "$@")" || return $?
+      eval "$__aiwitch_env"
+      printf 'switched: %s\n' "$(command aiwitch current)" >&2
+      unset __aiwitch_env
+      ;;
     use)
       shift
       __aiwitch_env="$(command aiwitch env "$@")" || return $?
@@ -155,6 +162,10 @@ const POSIX_INIT: &str = r#"aiwitch() {
 
 const FISH_INIT: &str = r#"function aiwitch
   switch $argv[1]
+    case add
+      set -l __aiwitch_env (command aiwitch add --print-env --shell=fish $argv[2..]); or return $status
+      printf '%s\n' $__aiwitch_env | source
+      printf 'switched: %s\n' (command aiwitch current) >&2
     case use
       set -l __aiwitch_env (command aiwitch env --shell=fish $argv[2..]); or return $status
       printf '%s\n' $__aiwitch_env | source
@@ -460,6 +471,17 @@ mod tests {
     }
 
     #[test]
+    fn init_snippet_posix_auto_switches_after_add() {
+        let s = init_snippet(Shell::Zsh);
+        assert!(s.contains("case \"$1\" in"));
+        assert!(s.contains("add)"));
+        assert!(s.contains("command aiwitch add --print-env"));
+        assert!(s.contains("eval \"$__aiwitch_env\""));
+        assert!(s.contains("switched: %s"));
+        assert!(s.contains(">&2"));
+    }
+
+    #[test]
     fn init_snippet_fish_uses_source_pipe_with_flag() {
         let s = init_snippet(Shell::Fish);
         assert!(s.contains("function aiwitch"));
@@ -472,5 +494,15 @@ mod tests {
         let s = init_snippet(Shell::Fish);
         assert!(s.contains("or return $status"), "must propagate exit status");
         assert!(s.contains("$argv[2..]"), "must forward all remaining args");
+    }
+
+    #[test]
+    fn init_snippet_fish_auto_switches_after_add() {
+        let s = init_snippet(Shell::Fish);
+        assert!(s.contains("case add"));
+        assert!(s.contains("command aiwitch add --print-env --shell=fish"));
+        assert!(s.contains("| source"));
+        assert!(s.contains("switched: %s"));
+        assert!(s.contains(">&2"));
     }
 }

@@ -1,18 +1,30 @@
 use crate::backend::BackendKind;
 use crate::error::{Context, Result};
 use crate::profile::{Profile, ProfilesFile, store};
-use crate::shell::validate_profile_name;
+use crate::shell::{EnvFormat, render_env, validate_profile_name};
 use anyhow::{anyhow, ensure};
 use clap::ValueEnum;
 use std::collections::HashSet;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-pub fn run(profile: &str, home: Option<&Path>, auth: Option<CodexAuthMode>) -> Result<()> {
+pub fn run(
+    profile: &str,
+    home: Option<&Path>,
+    auth: Option<CodexAuthMode>,
+    print_env: bool,
+    shell: EnvFormat,
+) -> Result<()> {
     let config_path = store::config_path()?;
     let home_base = store::expand_home_dir(Path::new("~"))?;
-    let outcome = add_to_config_with_auth(&config_path, &home_base, profile, home, auth)?;
+    if print_env {
+        let out =
+            add_to_config_and_render_env(&config_path, &home_base, profile, home, auth, shell)?;
+        print!("{out}");
+        return Ok(());
+    }
 
+    let outcome = add_to_config_with_auth(&config_path, &home_base, profile, home, auth)?;
     let mut stdout = std::io::stdout().lock();
     writeln!(stdout, "added profile {}", outcome.profile)?;
     writeln!(stdout, "home_dir: {}", outcome.home_dir)?;
@@ -100,6 +112,27 @@ fn add_to_config_with_auth(
         expanded_home,
         auth,
     })
+}
+
+fn add_to_config_and_render_env(
+    config_path: &Path,
+    home_base: &Path,
+    profile: &str,
+    home: Option<&Path>,
+    auth: Option<CodexAuthMode>,
+    shell: EnvFormat,
+) -> Result<String> {
+    let outcome = add_to_config_with_auth(config_path, home_base, profile, home, auth)?;
+    render_env(
+        shell,
+        &[
+            (
+                "CODEX_HOME".to_string(),
+                outcome.expanded_home.to_string_lossy().into_owned(),
+            ),
+            ("AIWITCH_CURRENT".to_string(), outcome.profile),
+        ],
+    )
 }
 
 fn write_codex_auth_config(codex_home: &Path, auth: CodexAuthMode) -> Result<()> {
@@ -427,6 +460,30 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(outcome.expanded_home.join("config.toml")).unwrap(),
             "forced_login_method = \"chatgpt\"\ncli_auth_credentials_store = \"file\"\n"
+        );
+    }
+
+    #[test]
+    fn add_and_render_env_returns_switch_snippet_only() {
+        let tmp = tempdir();
+        let config = tmp.path().join(".config/aiwitch/profiles.toml");
+
+        let out = add_to_config_and_render_env(
+            &config,
+            tmp.path(),
+            "codex_key",
+            None,
+            Some(CodexAuthMode::Api),
+            crate::shell::EnvFormat::Posix,
+        )
+        .unwrap();
+
+        assert_eq!(
+            out,
+            format!(
+                "export CODEX_HOME='{}'\nexport AIWITCH_CURRENT='codex_key'\n",
+                tmp.path().join(".codex-codex_key").display()
+            )
         );
     }
 

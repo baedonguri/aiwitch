@@ -28,6 +28,10 @@ enum Command {
         home: Option<std::path::PathBuf>,
         #[arg(long = "auth", value_enum)]
         auth: Option<add::CodexAuthMode>,
+        #[arg(long = "print-env", hide = true)]
+        print_env: bool,
+        #[arg(long = "shell", value_enum, default_value_t = EnvShell::Posix, hide = true)]
+        shell: EnvShell,
     },
     /** List profiles with email, plan, and expiry. */
     List,
@@ -92,7 +96,9 @@ pub fn run() -> Result<()> {
             profile,
             home,
             auth,
-        } => add::run(&profile, home.as_deref(), auth),
+            print_env,
+            shell,
+        } => add::run(&profile, home.as_deref(), auth, print_env, shell.into()),
         Command::List => list::run(),
         Command::Current => current::run(),
         Command::Env { profile, shell } => env::run(&profile, shell.into()),
