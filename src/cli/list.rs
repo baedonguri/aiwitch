@@ -63,7 +63,7 @@ fn current_profiles<E: EnvLookup>(env: &E, profiles: &ProfilesFile) -> Vec<Strin
 
 /** Pure renderer. Empty profiles -> header-only + hint line. */
 pub fn render(rows: &[(Profile, ProfileMeta)], current: &[String]) -> String {
-    let header = ["NAME", "BACKEND", "EMAIL", "PLAN", "EXPIRES", "CURRENT"];
+    let header = ["NAME", "PROVIDER", "EMAIL", "PLAN", "EXPIRES", "CURRENT"];
     if rows.is_empty() {
         return format!(
             "{}\n(no profiles configured — see ~/.config/aiwitch/profiles.toml)\n",
@@ -76,7 +76,7 @@ pub fn render(rows: &[(Profile, ProfileMeta)], current: &[String]) -> String {
         .map(|(profile, meta)| {
             [
                 profile.name.clone(),
-                backend_label(profile.backend).to_string(),
+                provider_label(profile.backend).to_string(),
                 meta.email.clone().unwrap_or_else(|| "-".to_string()),
                 meta.plan.clone().unwrap_or_else(|| "-".to_string()),
                 meta.subscription_until
@@ -108,7 +108,7 @@ pub fn render(rows: &[(Profile, ProfileMeta)], current: &[String]) -> String {
     out
 }
 
-fn backend_label(kind: BackendKind) -> &'static str {
+fn provider_label(kind: BackendKind) -> &'static str {
     match kind {
         BackendKind::Codex => "codex",
     }
@@ -165,7 +165,7 @@ mod tests {
     fn render_empty_profiles_shows_hint() {
         assert_eq!(
             render(&[], &[]),
-            "NAME | BACKEND | EMAIL | PLAN | EXPIRES | CURRENT\n(no profiles configured — see ~/.config/aiwitch/profiles.toml)\n"
+            "NAME | PROVIDER | EMAIL | PLAN | EXPIRES | CURRENT\n(no profiles configured — see ~/.config/aiwitch/profiles.toml)\n"
         );
     }
 
@@ -182,9 +182,9 @@ mod tests {
 
         assert_eq!(
             render(&rows, &[]),
-            "NAME     | BACKEND | EMAIL   | PLAN | EXPIRES    | CURRENT\n\
-             --------+-------+-------+----+----------+-------\n\
-             personal | codex   | a@b.com | plus | 2026-05-05 | \n"
+            "NAME     | PROVIDER | EMAIL   | PLAN | EXPIRES    | CURRENT\n\
+             --------+--------+-------+----+----------+-------\n\
+             personal | codex    | a@b.com | plus | 2026-05-05 | \n"
         );
     }
 
@@ -197,10 +197,10 @@ mod tests {
 
         assert_eq!(
             render(&rows, &["work".to_string()]),
-            "NAME     | BACKEND | EMAIL | PLAN | EXPIRES | CURRENT\n\
-             --------+-------+-----+----+-------+-------\n\
-             personal | codex   | -     | -    | -       | \n\
-             work     | codex   | -     | -    | -       | *\n"
+            "NAME     | PROVIDER | EMAIL | PLAN | EXPIRES | CURRENT\n\
+             --------+--------+-----+----+-------+-------\n\
+             personal | codex    | -     | -    | -       | \n\
+             work     | codex    | -     | -    | -       | *\n"
         );
     }
 
@@ -210,9 +210,9 @@ mod tests {
 
         assert_eq!(
             render(&rows, &[]),
-            "NAME     | BACKEND | EMAIL | PLAN | EXPIRES | CURRENT\n\
-             --------+-------+-----+----+-------+-------\n\
-             personal | codex   | -     | -    | -       | \n"
+            "NAME     | PROVIDER | EMAIL | PLAN | EXPIRES | CURRENT\n\
+             --------+--------+-----+----+-------+-------\n\
+             personal | codex    | -     | -    | -       | \n"
         );
     }
 
@@ -225,10 +225,10 @@ mod tests {
 
         assert_eq!(
             render(&rows, &[]),
-            "NAME      | BACKEND | EMAIL | PLAN | EXPIRES | CURRENT\n\
-             ---------+-------+-----+----+-------+-------\n\
-             p         | codex   | -     | -    | -       | \n\
-             long-name | codex   | -     | -    | -       | \n"
+            "NAME      | PROVIDER | EMAIL | PLAN | EXPIRES | CURRENT\n\
+             ---------+--------+-----+----+-------+-------\n\
+             p         | codex    | -     | -    | -       | \n\
+             long-name | codex    | -     | -    | -       | \n"
         );
     }
 
