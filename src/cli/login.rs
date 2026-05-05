@@ -1,7 +1,8 @@
-use crate::backend::codex::{self, CodexLoginMode};
-use crate::backend::{BackendKind, ProviderCommand};
+use crate::backend::{AnyBackend, Backend, LoginMode, ProviderCommand};
 use crate::error::{Context, Result};
-use crate::profile::{ProfilesFile, store};
+#[cfg(test)]
+use crate::profile::ProfilesFile;
+use crate::profile::{Profile, store};
 use crate::shell::validate_profile_name;
 use anyhow::ensure;
 use std::io::{Read, Write};
@@ -10,9 +11,11 @@ use std::process::{Command, Stdio};
 pub fn run(profile_name: &str, api_key: bool) -> Result<()> {
     validate_profile_name(profile_name)?;
     let profiles = store::load()?;
-    let spec = command_spec(&profiles, profile_name, api_key)?;
+    let profile = profiles.find_by_name(profile_name)?;
+    let backend = AnyBackend::from_kind(profile.backend);
+    let spec = command_spec_for_profile(&backend, profile, api_key)?;
     let api_key_input = if api_key {
-        Some(read_openai_api_key_from_stdin()?)
+        Some(read_api_key_from_stdin(&backend)?)
     } else {
         None
     };
@@ -54,6 +57,7 @@ fn run_command(spec: ProviderCommand, api_key_input: Option<String>) -> Result<(
     Ok(())
 }
 
+#[cfg(test)]
 fn command_spec(
     profiles: &ProfilesFile,
     profile_name: &str,
@@ -61,42 +65,33 @@ fn command_spec(
 ) -> Result<ProviderCommand> {
     validate_profile_name(profile_name)?;
     let profile = profiles.find_by_name(profile_name)?;
-    match profile.backend {
-        BackendKind::Codex => {
-            let mode = if api_key {
-                CodexLoginMode::ApiKey
-            } else {
-                CodexLoginMode::Chatgpt
-            };
-            codex::login_command(profile, mode)
-        }
-    }
+    let backend = AnyBackend::from_kind(profile.backend);
+    command_spec_for_profile(&backend, profile, api_key)
 }
 
-fn read_openai_api_key_from_stdin() -> Result<String> {
+fn command_spec_for_profile(
+    backend: &AnyBackend,
+    profile: &Profile,
+    api_key: bool,
+) -> Result<ProviderCommand> {
+    let mode = if api_key {
+        LoginMode::ApiKey
+    } else {
+        LoginMode::Interactive
+    };
+    backend.login_command(profile, mode)
+}
+
+fn read_api_key_from_stdin(backend: &AnyBackend) -> Result<String> {
     let mut input = String::new();
     std::io::stdin()
         .read_to_string(&mut input)
-        .context("failed to read OpenAI API key from stdin")?;
-    normalize_openai_api_key(&input)
+        .context("failed to read API key from stdin")?;
+    normalize_api_key(backend, &input)
 }
 
-fn normalize_openai_api_key(input: &str) -> Result<String> {
-    let key = input.trim();
-    ensure!(!key.is_empty(), "OpenAI API key is empty");
-    ensure!(
-        !key.chars().any(char::is_whitespace),
-        "OpenAI API key must not contain whitespace"
-    );
-    ensure!(
-        !key.starts_with("sk-ant-"),
-        "Codex API key login requires an OpenAI API key, not an Anthropic key"
-    );
-    ensure!(
-        key.starts_with("sk-"),
-        "Codex API key login requires an OpenAI API key (expected sk-... or sk-proj-...)"
-    );
-    Ok(key.to_string())
+fn normalize_api_key(backend: &AnyBackend, input: &str) -> Result<String> {
+    backend.normalize_api_key(input)
 }
 
 #[cfg(test)]
@@ -114,6 +109,10 @@ mod tests {
                 home_dir: PathBuf::from("/abs/codex-api"),
             }],
         }
+    }
+
+    fn backend() -> AnyBackend {
+        AnyBackend::from_kind(BackendKind::Codex)
     }
 
     #[test]
@@ -152,42 +151,42 @@ mod tests {
 
     #[test]
     fn normalize_api_key_accepts_openai_project_key() {
-        let key = normalize_openai_api_key("  sk-proj-test1234567890\n").unwrap();
+        let key = normalize_api_key(&backend(), "  sk-proj-test1234567890\n").unwrap();
 
         assert_eq!(key, "sk-proj-test1234567890");
     }
 
     #[test]
     fn normalize_api_key_accepts_legacy_openai_key() {
-        let key = normalize_openai_api_key("sk-test1234567890").unwrap();
+        let key = normalize_api_key(&backend(), "sk-test1234567890").unwrap();
 
         assert_eq!(key, "sk-test1234567890");
     }
 
     #[test]
     fn normalize_api_key_rejects_empty_input() {
-        let err = normalize_openai_api_key(" \n").unwrap_err();
+        let err = normalize_api_key(&backend(), " \n").unwrap_err();
 
         assert!(format!("{err}").contains("empty"));
     }
 
     #[test]
     fn normalize_api_key_rejects_anthropic_key() {
-        let err = normalize_openai_api_key("sk-ant-api03-test").unwrap_err();
+        let err = normalize_api_key(&backend(), "sk-ant-api03-test").unwrap_err();
 
         assert!(format!("{err}").contains("Anthropic"));
     }
 
     #[test]
     fn normalize_api_key_rejects_shell_command_text() {
-        let err = normalize_openai_api_key("printf 'n'").unwrap_err();
+        let err = normalize_api_key(&backend(), "printf 'n'").unwrap_err();
 
         assert!(format!("{err}").contains("OpenAI API key"));
     }
 
     #[test]
     fn normalize_api_key_rejects_internal_whitespace() {
-        let err = normalize_openai_api_key("sk-proj-test value").unwrap_err();
+        let err = normalize_api_key(&backend(), "sk-proj-test value").unwrap_err();
 
         assert!(format!("{err}").contains("whitespace"));
     }

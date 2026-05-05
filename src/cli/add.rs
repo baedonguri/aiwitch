@@ -1,4 +1,4 @@
-use crate::backend::BackendKind;
+use crate::backend::{AnyBackend, Backend, BackendKind, LoginMode, ProvisionOptions};
 use crate::error::{Context, Result};
 use crate::profile::{Profile, ProfilesFile, store};
 use crate::shell::{EnvFormat, render_env, validate_profile_name};
@@ -59,6 +59,15 @@ impl CodexAuthMode {
     }
 }
 
+impl From<CodexAuthMode> for LoginMode {
+    fn from(auth: CodexAuthMode) -> Self {
+        match auth {
+            CodexAuthMode::Chatgpt => LoginMode::Interactive,
+            CodexAuthMode::Api => LoginMode::ApiKey,
+        }
+    }
+}
+
 #[derive(Debug)]
 struct AddOutcome {
     profile: String,
@@ -100,9 +109,17 @@ fn add_to_config_with_auth(
     let expanded_home = store::expand_home_dir_in(Path::new(&home_dir), home_base)?;
     std::fs::create_dir_all(&expanded_home)
         .with_context(|| format!("failed to create {}", expanded_home.display()))?;
-    if let Some(auth) = auth {
-        write_codex_auth_config(&expanded_home, auth)?;
-    }
+    let provision_profile = Profile {
+        name: profile.to_string(),
+        backend: BackendKind::Codex,
+        home_dir: expanded_home.clone(),
+    };
+    AnyBackend::from_kind(BackendKind::Codex).provision(
+        &provision_profile,
+        ProvisionOptions {
+            auth_mode: auth.map(Into::into),
+        },
+    )?;
     std::fs::write(config_path, updated)
         .with_context(|| format!("failed to write {}", config_path.display()))?;
 
@@ -133,83 +150,6 @@ fn add_to_config_and_render_env(
             ("AIWITCH_CURRENT".to_string(), outcome.profile),
         ],
     )
-}
-
-fn write_codex_auth_config(codex_home: &Path, auth: CodexAuthMode) -> Result<()> {
-    std::fs::create_dir_all(codex_home)
-        .with_context(|| format!("failed to create {}", codex_home.display()))?;
-    let path = codex_home.join("config.toml");
-    let existing = match std::fs::read_to_string(&path) {
-        Ok(text) => text,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(e) => {
-            return Err(anyhow::Error::new(e).context(format!("failed to read {}", path.display())));
-        }
-    };
-
-    let mut prefix = String::new();
-    if !has_root_toml_key(&existing, "forced_login_method") {
-        prefix.push_str(&format!(
-            "forced_login_method = \"{}\"\n",
-            auth.config_value()
-        ));
-    }
-    if !has_root_toml_key(&existing, "cli_auth_credentials_store") {
-        prefix.push_str("cli_auth_credentials_store = \"file\"\n");
-    }
-
-    let updated = insert_root_toml_keys(prefix, existing);
-    std::fs::write(&path, updated).with_context(|| format!("failed to write {}", path.display()))
-}
-
-fn has_root_toml_key(text: &str, key: &str) -> bool {
-    for line in text.lines() {
-        let trimmed = line.trim_start();
-        if trimmed.starts_with('[') {
-            return false;
-        }
-        if !trimmed.starts_with('#')
-            && trimmed
-                .strip_prefix(key)
-                .is_some_and(|rest| rest.trim_start().starts_with('='))
-        {
-            return true;
-        }
-    }
-    false
-}
-
-fn insert_root_toml_keys(prefix: String, existing: String) -> String {
-    if prefix.is_empty() {
-        return existing;
-    }
-    if existing.is_empty() {
-        return prefix;
-    }
-    let Some(table_start) = first_toml_table_start(&existing) else {
-        let separator = if existing.ends_with('\n') { "" } else { "\n" };
-        return format!("{existing}{separator}{prefix}");
-    };
-
-    let (root, tables) = existing.split_at(table_start);
-    if root.is_empty() {
-        format!("{prefix}\n{tables}")
-    } else if root.ends_with('\n') {
-        format!("{root}{prefix}\n{tables}")
-    } else {
-        format!("{root}\n{prefix}\n{tables}")
-    }
-}
-
-fn first_toml_table_start(text: &str) -> Option<usize> {
-    let mut offset = 0;
-    for line in text.split_inclusive('\n') {
-        if line.trim_start().starts_with('[') {
-            return Some(offset);
-        }
-        offset += line.len();
-    }
-    None
 }
 
 fn default_home(profile: &str) -> String {
@@ -497,7 +437,14 @@ mod tests {
         )
         .unwrap();
 
-        write_codex_auth_config(tmp.path(), CodexAuthMode::Chatgpt).unwrap();
+        add_to_config_with_auth(
+            &tmp.path().join("profiles.toml"),
+            tmp.path(),
+            "codex_existing",
+            Some(tmp.path()),
+            Some(CodexAuthMode::Chatgpt),
+        )
+        .unwrap();
 
         assert_eq!(
             std::fs::read_to_string(config).unwrap(),
@@ -511,7 +458,14 @@ mod tests {
         let config = tmp.path().join("config.toml");
         std::fs::write(&config, "[mcp_servers.foo]\ncommand = \"foo\"\n").unwrap();
 
-        write_codex_auth_config(tmp.path(), CodexAuthMode::Api).unwrap();
+        add_to_config_with_auth(
+            &tmp.path().join("profiles.toml"),
+            tmp.path(),
+            "codex_existing",
+            Some(tmp.path()),
+            Some(CodexAuthMode::Api),
+        )
+        .unwrap();
 
         assert_eq!(
             std::fs::read_to_string(config).unwrap(),
@@ -529,7 +483,14 @@ mod tests {
         )
         .unwrap();
 
-        write_codex_auth_config(tmp.path(), CodexAuthMode::Api).unwrap();
+        add_to_config_with_auth(
+            &tmp.path().join("profiles.toml"),
+            tmp.path(),
+            "codex_existing",
+            Some(tmp.path()),
+            Some(CodexAuthMode::Api),
+        )
+        .unwrap();
 
         assert_eq!(
             std::fs::read_to_string(config).unwrap(),

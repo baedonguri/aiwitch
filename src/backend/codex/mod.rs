@@ -1,4 +1,4 @@
-use super::{Backend, BackendKind, ProfileMeta, ProviderCommand};
+use super::{Backend, BackendKind, LoginMode, ProfileMeta, ProviderCommand, ProvisionOptions};
 use crate::error::{Context, Result};
 use crate::profile::Profile;
 use anyhow::ensure;
@@ -88,6 +88,132 @@ impl Backend for CodexBackend {
             subscription_until,
         })
     }
+
+    fn login_command(&self, profile: &Profile, mode: LoginMode) -> Result<ProviderCommand> {
+        let mode = match mode {
+            LoginMode::Interactive => CodexLoginMode::Chatgpt,
+            LoginMode::ApiKey => CodexLoginMode::ApiKey,
+        };
+        login_command(profile, mode)
+    }
+
+    fn normalize_api_key(&self, input: &str) -> Result<String> {
+        normalize_api_key(input)
+    }
+
+    fn provision(&self, profile: &Profile, options: ProvisionOptions) -> Result<()> {
+        ensure!(
+            profile.backend == BackendKind::Codex,
+            "CodexBackend received non-codex profile {:?}",
+            profile.name
+        );
+        if let Some(auth_mode) = options.auth_mode {
+            write_auth_config(&profile.home_dir, auth_mode)?;
+        }
+        Ok(())
+    }
+}
+
+pub fn normalize_api_key(input: &str) -> Result<String> {
+    let key = input.trim();
+    ensure!(!key.is_empty(), "OpenAI API key is empty");
+    ensure!(
+        !key.chars().any(char::is_whitespace),
+        "OpenAI API key must not contain whitespace"
+    );
+    ensure!(
+        !key.starts_with("sk-ant-"),
+        "Codex API key login requires an OpenAI API key, not an Anthropic key"
+    );
+    ensure!(
+        key.starts_with("sk-"),
+        "Codex API key login requires an OpenAI API key (expected sk-... or sk-proj-...)"
+    );
+    Ok(key.to_string())
+}
+
+fn write_auth_config(codex_home: &std::path::Path, auth: LoginMode) -> Result<()> {
+    std::fs::create_dir_all(codex_home)
+        .with_context(|| format!("failed to create {}", codex_home.display()))?;
+    let path = codex_home.join("config.toml");
+    let existing = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => {
+            return Err(anyhow::Error::new(e).context(format!("failed to read {}", path.display())));
+        }
+    };
+
+    let mut prefix = String::new();
+    if !has_root_toml_key(&existing, "forced_login_method") {
+        prefix.push_str(&format!(
+            "forced_login_method = \"{}\"\n",
+            auth_config_value(auth)
+        ));
+    }
+    if !has_root_toml_key(&existing, "cli_auth_credentials_store") {
+        prefix.push_str("cli_auth_credentials_store = \"file\"\n");
+    }
+
+    let updated = insert_root_toml_keys(prefix, existing);
+    std::fs::write(&path, updated).with_context(|| format!("failed to write {}", path.display()))
+}
+
+fn auth_config_value(auth: LoginMode) -> &'static str {
+    match auth {
+        LoginMode::Interactive => "chatgpt",
+        LoginMode::ApiKey => "api",
+    }
+}
+
+fn has_root_toml_key(text: &str, key: &str) -> bool {
+    for line in text.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with('[') {
+            return false;
+        }
+        if !trimmed.starts_with('#')
+            && trimmed
+                .strip_prefix(key)
+                .is_some_and(|rest| rest.trim_start().starts_with('='))
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn insert_root_toml_keys(prefix: String, existing: String) -> String {
+    if prefix.is_empty() {
+        return existing;
+    }
+    if existing.is_empty() {
+        return prefix;
+    }
+    let Some(table_start) = first_toml_table_start(&existing) else {
+        let separator = if existing.ends_with('\n') { "" } else { "\n" };
+        return format!("{existing}{separator}{prefix}");
+    };
+
+    let (root, tables) = existing.split_at(table_start);
+    if root.is_empty() {
+        format!("{prefix}\n{tables}")
+    } else if root.ends_with('\n') {
+        format!("{root}{prefix}\n{tables}")
+    } else {
+        format!("{root}\n{prefix}\n{tables}")
+    }
+}
+
+fn first_toml_table_start(text: &str) -> Option<usize> {
+    let mut offset = 0;
+    for line in text.split_inclusive('\n') {
+        if line.trim_start().starts_with('[') {
+            return Some(offset);
+        }
+        offset += line.len();
+    }
+    None
 }
 
 #[cfg(test)]
@@ -208,6 +334,87 @@ mod tests {
                 "--with-api-key".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn backend_login_command_maps_generic_api_key_mode() {
+        let p = profile("p", "/abs/codex");
+
+        let command = CodexBackend.login_command(&p, LoginMode::ApiKey).unwrap();
+
+        assert!(command.args.contains(&"--with-api-key".to_string()));
+    }
+
+    #[test]
+    fn backend_login_command_maps_generic_interactive_mode() {
+        let p = profile("p", "/abs/codex");
+
+        let command = CodexBackend
+            .login_command(&p, LoginMode::Interactive)
+            .unwrap();
+
+        assert!(!command.args.contains(&"--with-api-key".to_string()));
+    }
+
+    #[test]
+    fn normalize_api_key_rejects_anthropic_key() {
+        let err = CodexBackend
+            .normalize_api_key("sk-ant-api03-test")
+            .unwrap_err();
+
+        assert!(format!("{err}").contains("Anthropic"));
+    }
+
+    #[test]
+    fn provision_writes_api_auth_config() {
+        let tmp = tempdir();
+        let p = profile("p", tmp.path().to_str().unwrap());
+
+        CodexBackend
+            .provision(
+                &p,
+                ProvisionOptions {
+                    auth_mode: Some(LoginMode::ApiKey),
+                },
+            )
+            .unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("config.toml")).unwrap(),
+            "forced_login_method = \"api\"\ncli_auth_credentials_store = \"file\"\n"
+        );
+    }
+
+    #[test]
+    fn provision_writes_interactive_auth_config() {
+        let tmp = tempdir();
+        let p = profile("p", tmp.path().to_str().unwrap());
+
+        CodexBackend
+            .provision(
+                &p,
+                ProvisionOptions {
+                    auth_mode: Some(LoginMode::Interactive),
+                },
+            )
+            .unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("config.toml")).unwrap(),
+            "forced_login_method = \"chatgpt\"\ncli_auth_credentials_store = \"file\"\n"
+        );
+    }
+
+    #[test]
+    fn provision_without_auth_mode_is_noop() {
+        let tmp = tempdir();
+        let p = profile("p", tmp.path().to_str().unwrap());
+
+        CodexBackend
+            .provision(&p, ProvisionOptions { auth_mode: None })
+            .unwrap();
+
+        assert!(!tmp.path().join("config.toml").exists());
     }
 
     struct TempDir(PathBuf);

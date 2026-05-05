@@ -25,6 +25,17 @@ pub struct ProviderCommand {
     pub envs: Vec<(String, String)>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoginMode {
+    Interactive,
+    ApiKey,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct ProvisionOptions {
+    pub auth_mode: Option<LoginMode>,
+}
+
 pub trait Backend {
     fn id(&self) -> BackendKind;
 
@@ -33,6 +44,12 @@ pub trait Backend {
 
     /** Best-effort metadata. Callers must tolerate `Err` and render an empty row. */
     fn read_meta(&self, profile: &Profile) -> Result<ProfileMeta>;
+
+    fn login_command(&self, profile: &Profile, mode: LoginMode) -> Result<ProviderCommand>;
+
+    fn normalize_api_key(&self, input: &str) -> Result<String>;
+
+    fn provision(&self, profile: &Profile, options: ProvisionOptions) -> Result<()>;
 }
 
 pub enum AnyBackend {
@@ -61,6 +78,21 @@ impl Backend for AnyBackend {
     fn read_meta(&self, profile: &Profile) -> Result<ProfileMeta> {
         match self {
             AnyBackend::Codex(b) => b.read_meta(profile),
+        }
+    }
+    fn login_command(&self, profile: &Profile, mode: LoginMode) -> Result<ProviderCommand> {
+        match self {
+            AnyBackend::Codex(b) => b.login_command(profile, mode),
+        }
+    }
+    fn normalize_api_key(&self, input: &str) -> Result<String> {
+        match self {
+            AnyBackend::Codex(b) => b.normalize_api_key(input),
+        }
+    }
+    fn provision(&self, profile: &Profile, options: ProvisionOptions) -> Result<()> {
+        match self {
+            AnyBackend::Codex(b) => b.provision(profile, options),
         }
     }
 }
