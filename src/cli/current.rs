@@ -29,7 +29,7 @@ impl EnvLookup for HashMap<String, String> {
 pub struct CurrentOutcome {
     /** Goes to stdout (always exactly one line). */
     pub display: String,
-    /** Optional one-line message for stderr (e.g. invalid AIWITCH_CURRENT). */
+    /** Optional one-line message for stderr (e.g. invalid `AIWITCH_CURRENT`). */
     pub warning: Option<String>,
 }
 
@@ -42,26 +42,29 @@ pub fn run() -> Result<()> {
     Ok(())
 }
 
-/** Pure decision function. AIWITCH_CURRENT (when valid) is the fast path and
+/** Pure decision function. `AIWITCH_CURRENT` (when valid) is the fast path and
  *  skips loading `profiles.toml` entirely so first-run UX errors don't surface
  *  for users who already have a sentinel set. */
 pub fn decide<E: EnvLookup, F: FnOnce() -> Result<ProfilesFile>>(
     env: &E,
     load_profiles: F,
 ) -> Result<CurrentOutcome> {
-    if let Some(raw) = env.get(AIWITCH_CURRENT_KEY) {
-        if !raw.is_empty() {
-            return Ok(if validate_profile_name(&raw).is_ok() {
-                CurrentOutcome { display: raw, warning: None }
-            } else {
-                CurrentOutcome {
-                    display: UNMANAGED.to_string(),
-                    warning: Some(format!(
-                        "{AIWITCH_CURRENT_KEY} is set to invalid value {raw:?}"
-                    )),
-                }
-            });
-        }
+    if let Some(raw) = env.get(AIWITCH_CURRENT_KEY)
+        && !raw.is_empty()
+    {
+        return Ok(if validate_profile_name(&raw).is_ok() {
+            CurrentOutcome {
+                display: raw,
+                warning: None,
+            }
+        } else {
+            CurrentOutcome {
+                display: UNMANAGED.to_string(),
+                warning: Some(format!(
+                    "{AIWITCH_CURRENT_KEY} is set to invalid value {raw:?}"
+                )),
+            }
+        });
     }
 
     let profiles = load_profiles()?;
@@ -75,11 +78,17 @@ pub fn decide<E: EnvLookup, F: FnOnce() -> Result<ProfilesFile>>(
             .iter()
             .all(|(k, v)| env.get(k).as_deref() == Some(v.as_str()));
         if all_match {
-            return Ok(CurrentOutcome { display: p.name.clone(), warning: None });
+            return Ok(CurrentOutcome {
+                display: p.name.clone(),
+                warning: None,
+            });
         }
     }
 
-    Ok(CurrentOutcome { display: UNMANAGED.to_string(), warning: None })
+    Ok(CurrentOutcome {
+        display: UNMANAGED.to_string(),
+        warning: None,
+    })
 }
 
 #[cfg(test)]
@@ -90,7 +99,10 @@ mod tests {
     use std::path::PathBuf;
 
     fn env_map(pairs: &[(&str, &str)]) -> HashMap<String, String> {
-        pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
     }
 
     fn pf(specs: &[(&str, &str)]) -> ProfilesFile {

@@ -37,6 +37,8 @@ pub struct ProvisionOptions {
 }
 
 pub trait Backend {
+    #[allow(dead_code)]
+    /** Reserved for future dispatch logic; required by impls for self-identification. */
     fn id(&self) -> BackendKind;
 
     /** Key/value pairs to be emitted as shell `export` lines. Caller handles escaping. */

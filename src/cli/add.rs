@@ -86,7 +86,7 @@ fn add_to_config_with_auth(
     let home_dir = match home {
         Some(path) => path
             .to_str()
-            .ok_or_else(|| anyhow!("home path is not valid UTF-8: {path:?}"))?
+            .ok_or_else(|| anyhow!("home path is not valid UTF-8: {}", path.display()))?
             .to_string(),
         None => default_home(profile),
     };

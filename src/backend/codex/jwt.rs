@@ -8,7 +8,10 @@ use serde::Deserialize;
 #[derive(Debug, Deserialize)]
 pub struct IdTokenPayload {
     pub email: Option<String>,
+    #[allow(dead_code)]
+    /** Deserialized for schema fidelity; not surfaced yet. */
     pub name: Option<String>,
+    #[allow(dead_code)]
     pub exp: Option<i64>,
     #[serde(rename = "https://api.openai.com/auth")]
     pub openai_auth: Option<OpenAiAuth>,
@@ -19,13 +22,18 @@ pub struct OpenAiAuth {
     pub chatgpt_plan_type: Option<String>,
     #[serde(default, deserialize_with = "lenient_datetime")]
     pub chatgpt_subscription_active_until: Option<DateTime<Utc>>,
+    #[allow(dead_code)]
     pub chatgpt_account_id: Option<String>,
+    #[allow(dead_code)]
     pub chatgpt_user_id: Option<String>,
     #[serde(default)]
+    #[allow(dead_code)]
     pub organizations: Vec<Organization>,
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+/** All fields deserialized for schema fidelity; none consumed yet. */
 pub struct Organization {
     pub id: String,
     pub role: Option<String>,

@@ -27,7 +27,7 @@ pub fn expand_home_dir(path: &Path) -> Result<PathBuf> {
 pub fn expand_home_dir_in(path: &Path, home: &Path) -> Result<PathBuf> {
     let s = path
         .to_str()
-        .ok_or_else(|| anyhow!("path is not valid UTF-8: {path:?}"))?;
+        .ok_or_else(|| anyhow!("path is not valid UTF-8: {}", path.display()))?;
 
     if s == "~" {
         return Ok(home.to_path_buf());
