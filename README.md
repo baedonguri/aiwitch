@@ -42,16 +42,18 @@ brew install baedonguri/tap/aiwitch
 # Enable in-shell switching (add to ~/.zshrc; bash/fish similar — see Shell setup)
 eval "$(aiwitch shell init zsh)"
 
-# Add profiles (one per account)
-aiwitch add codex-personal
-aiwitch add codex-work
+# Add profiles (registers and runs `<provider> login` — ChatGPT by default)
+aiwitch add codex personal
+aiwitch add codex work
 
-# Switch the current shell, then run Codex with that profile's account
-aiwitch use codex-personal && codex
-aiwitch use codex-work     && codex
+# Switch the current shell to a profile
+aiwitch use personal
+
+# Then run Codex with that profile's account
+codex
 ```
 
-> First run prompts Codex to log in. For API-key flows, see [Login](#login).
+> `aiwitch add <provider> <profile>` triggers the provider's login flow for the new profile. For API-key flows, see [Login](#login).
 
 ## Why
 
@@ -61,14 +63,15 @@ Inspired by `nvm`/`pyenv`-style version switchers, applied to AI CLI accounts.
 
 ## Requirements
 
-- macOS with [Homebrew](https://brew.sh), or any OS with Rust 1.85+
+- macOS or Linux with Rust 1.85+ (Windows is not supported in v0.1.0)
+- [Homebrew](https://brew.sh) on macOS, if you want the `brew install` path
 - [Codex CLI](https://github.com/openai/codex) installed and on `PATH`
 - For API-key login: an OpenAI API key on stdin (`$OPENAI_API_KEY` or piped)
 
 ## Key features
 
 - **[Per-profile `CODEX_HOME`](#how-it-works)** — every profile has an isolated directory; switching is a single env-var swap.
-- **[In-shell switching](#shell-setup)** — `aiwitch use <profile>` and `aiwitch add <profile>` mutate the current shell via a small snippet for zsh, bash, and fish.
+- **[In-shell switching](#shell-setup)** — `aiwitch use <profile>` and `aiwitch add <provider> <profile>` mutate the current shell via a small snippet for zsh, bash, and fish.
 - **Two Codex auth modes** — ChatGPT login and API-key login; the latter reads the key from stdin and pipes it straight to `codex` without `aiwitch` persisting it.
 - **TOML config** — a single `~/.config/aiwitch/profiles.toml` with strict name validation and duplicate detection.
 - **Backend trait** — adding a new provider is a `Backend` impl, not a CLI rewrite.
@@ -90,7 +93,7 @@ brew tap baedonguri/tap
 brew install aiwitch
 ```
 
-### From source (any platform)
+### From source (macOS / Linux)
 
 Requires Rust 1.85+.
 
@@ -118,7 +121,7 @@ This wires up two extra subcommands:
 | Command | What it does |
 |---|---|
 | `aiwitch use <profile>` | Switch the current shell to an existing profile. |
-| `aiwitch add <profile>` | Add a profile **and** activate it in the current shell. |
+| `aiwitch add <provider> <profile>` | Add a profile, run its login flow, **and** activate it in the current shell. |
 
 Without `shell init` you can still drive everything manually via `eval "$(aiwitch env <profile>)"`.
 
@@ -139,15 +142,19 @@ Codex picks up its account from the `CODEX_HOME` directory (`auth.json` lives in
 
 ### Add a profile
 
+`aiwitch add <provider> <profile>` registers the profile and immediately runs the provider's login flow. The provider name is required (today only `codex` is supported). Login mode defaults to ChatGPT; pass `--auth api` to log in with an API key instead.
+
 ```sh
-aiwitch add work --home ~/.codex-work --auth api
-aiwitch add personal --home ~/.codex-personal --auth chatgpt
+aiwitch add codex personal                                    # ChatGPT login
+echo "$OPENAI_API_KEY" | aiwitch add codex work --auth api    # API key login (stdin)
 ```
 
 | Flag | Meaning |
 |---|---|
 | `--home <PATH>` | Directory used as `CODEX_HOME`. Optional; defaults to `~/.codex-<profile>`. |
-| `--auth <chatgpt\|api>` | Codex login mode. Optional. |
+| `--auth <chatgpt\|api>` | Codex login mode. Optional; defaults to `chatgpt`. |
+
+> If login fails or is canceled, the profile is still registered. Retry with `aiwitch login <profile>` (add `--api-key` for API-key mode).
 
 ### List profiles
 

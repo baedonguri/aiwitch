@@ -9,6 +9,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 pub fn run(
+    provider: BackendKind,
     profile: &str,
     home: Option<&Path>,
     auth: Option<CodexAuthMode>,
@@ -17,14 +18,33 @@ pub fn run(
 ) -> Result<()> {
     let config_path = store::config_path()?;
     let home_base = store::expand_home_dir(Path::new("~"))?;
+    let outcome = add_to_config_with_auth(&config_path, &home_base, provider, profile, home, auth)?;
+
+    // Default to ChatGPT login when `--auth` is omitted, so `aiwitch add <name>`
+    // registers the profile AND authenticates it in one step.
+    let effective_auth = auth.unwrap_or(CodexAuthMode::Chatgpt);
+    spawn_provider_login(&outcome, effective_auth, print_env).with_context(|| {
+        format!(
+            "profile {:?} was added but login did not complete; retry with `aiwitch login {}`",
+            outcome.profile, outcome.profile
+        )
+    })?;
+
     if print_env {
-        let out =
-            add_to_config_and_render_env(&config_path, &home_base, profile, home, auth, shell)?;
-        print!("{out}");
+        let snippet = render_env(
+            shell,
+            &[
+                (
+                    "CODEX_HOME".to_string(),
+                    outcome.expanded_home.to_string_lossy().into_owned(),
+                ),
+                ("AIWITCH_CURRENT".to_string(), outcome.profile.clone()),
+            ],
+        )?;
+        print!("{snippet}");
         return Ok(());
     }
 
-    let outcome = add_to_config_with_auth(&config_path, &home_base, profile, home, auth)?;
     let mut stdout = std::io::stdout().lock();
     writeln!(stdout, "added profile {}", outcome.profile)?;
     writeln!(stdout, "home_dir: {}", outcome.home_dir)?;
@@ -42,6 +62,30 @@ pub fn run(
         writeln!(stdout, "auth: {}", auth.config_value())?;
     }
     Ok(())
+}
+
+fn spawn_provider_login(outcome: &AddOutcome, auth: CodexAuthMode, print_env: bool) -> Result<()> {
+    let backend = AnyBackend::from_kind(outcome.provider);
+    let profile = Profile {
+        name: outcome.profile.clone(),
+        backend: outcome.provider,
+        home_dir: outcome.expanded_home.clone(),
+    };
+    let api_key_mode = matches!(auth, CodexAuthMode::Api);
+    let spec = super::login::command_spec_for_profile(&backend, &profile, api_key_mode)?;
+    let api_key_input = if api_key_mode {
+        Some(super::login::read_api_key_from_stdin(&backend)?)
+    } else {
+        None
+    };
+    super::login::run_command(
+        spec,
+        api_key_input,
+        &super::login::RunOptions {
+            redirect_stdout_to_stderr: print_env,
+            profile_name: Some(outcome.profile.clone()),
+        },
+    )
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -71,6 +115,7 @@ impl From<CodexAuthMode> for LoginMode {
 #[derive(Debug)]
 struct AddOutcome {
     profile: String,
+    provider: BackendKind,
     home_dir: String,
     expanded_home: PathBuf,
     auth: Option<CodexAuthMode>,
@@ -79,6 +124,7 @@ struct AddOutcome {
 fn add_to_config_with_auth(
     config_path: &Path,
     home_base: &Path,
+    provider: BackendKind,
     profile: &str,
     home: Option<&Path>,
     auth: Option<CodexAuthMode>,
@@ -88,7 +134,7 @@ fn add_to_config_with_auth(
             .to_str()
             .ok_or_else(|| anyhow!("home path is not valid UTF-8: {}", path.display()))?
             .to_string(),
-        None => default_home(profile),
+        None => default_home(provider, profile),
     };
 
     let existing = match std::fs::read_to_string(config_path) {
@@ -100,7 +146,8 @@ fn add_to_config_with_auth(
             );
         }
     };
-    let updated = add_profile_to_text_in(existing.as_deref(), home_base, profile, &home_dir)?;
+    let updated =
+        add_profile_to_text_in(existing.as_deref(), home_base, provider, profile, &home_dir)?;
 
     if let Some(parent) = config_path.parent() {
         std::fs::create_dir_all(parent)
@@ -111,10 +158,10 @@ fn add_to_config_with_auth(
         .with_context(|| format!("failed to create {}", expanded_home.display()))?;
     let provision_profile = Profile {
         name: profile.to_string(),
-        backend: BackendKind::Codex,
+        backend: provider,
         home_dir: expanded_home.clone(),
     };
-    AnyBackend::from_kind(BackendKind::Codex).provision(
+    AnyBackend::from_kind(provider).provision(
         &provision_profile,
         ProvisionOptions {
             auth_mode: auth.map(Into::into),
@@ -125,40 +172,28 @@ fn add_to_config_with_auth(
 
     Ok(AddOutcome {
         profile: profile.to_string(),
+        provider,
         home_dir,
         expanded_home,
         auth,
     })
 }
 
-fn add_to_config_and_render_env(
-    config_path: &Path,
-    home_base: &Path,
-    profile: &str,
-    home: Option<&Path>,
-    auth: Option<CodexAuthMode>,
-    shell: EnvFormat,
-) -> Result<String> {
-    let outcome = add_to_config_with_auth(config_path, home_base, profile, home, auth)?;
-    render_env(
-        shell,
-        &[
-            (
-                "CODEX_HOME".to_string(),
-                outcome.expanded_home.to_string_lossy().into_owned(),
-            ),
-            ("AIWITCH_CURRENT".to_string(), outcome.profile),
-        ],
-    )
+fn default_home(provider: BackendKind, profile: &str) -> String {
+    let prefix = provider_home_prefix(provider);
+    format!("~/.{prefix}-{profile}")
 }
 
-fn default_home(profile: &str) -> String {
-    format!("~/.codex-{profile}")
+fn provider_home_prefix(provider: BackendKind) -> &'static str {
+    match provider {
+        BackendKind::Codex => "codex",
+    }
 }
 
 fn add_profile_to_text_in(
     existing: Option<&str>,
     home_base: &Path,
+    provider: BackendKind,
     name: &str,
     home_dir: &str,
 ) -> Result<String> {
@@ -178,19 +213,19 @@ fn add_profile_to_text_in(
             .context("invalid existing profile home_dir")?;
         ensure!(
             seen.insert(profile.name.as_str()),
-            "duplicate profile name {:?}",
+            "duplicate profile name {:?}\nhint: pick a different name, or run `aiwitch list` to see existing profiles",
             profile.name
         );
     }
     ensure!(
         !parsed.profiles.iter().any(|p| p.name == name),
-        "duplicate profile name {name:?}"
+        "duplicate profile name {name:?}\nhint: pick a different name, or run `aiwitch list` to see existing profiles"
     );
 
     let block = toml::to_string(&ProfilesFile {
         profiles: vec![Profile {
             name: name.to_string(),
-            backend: BackendKind::Codex,
+            backend: provider,
             home_dir: Path::new(home_dir).to_path_buf(),
         }],
     })?;
@@ -209,9 +244,11 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
+    const CODEX: BackendKind = BackendKind::Codex;
+
     #[test]
     fn default_home_for_profile_uses_codex_prefix() {
-        assert_eq!(default_home("codex_lemon"), "~/.codex-codex_lemon");
+        assert_eq!(default_home(CODEX, "codex_lemon"), "~/.codex-codex_lemon");
     }
 
     #[test]
@@ -219,6 +256,7 @@ mod tests {
         let got = add_profile_to_text_in(
             None,
             Path::new("/home"),
+            CODEX,
             "codex_lemon",
             "~/.codex-codex_lemon",
         )
@@ -238,6 +276,7 @@ mod tests {
         let got = add_profile_to_text_in(
             Some(existing),
             Path::new("/home"),
+            CODEX,
             "codex_lemon",
             "~/.codex-lemon",
         )
@@ -256,12 +295,15 @@ mod tests {
         let err = add_profile_to_text_in(
             Some(existing),
             Path::new("/home"),
+            CODEX,
             "codex_lemon",
             "~/.codex-other",
         )
         .unwrap_err();
 
-        assert!(format!("{err}").contains("duplicate"));
+        let msg = format!("{err}");
+        assert!(msg.contains("duplicate"));
+        assert!(msg.contains("hint:"));
     }
 
     #[test]
@@ -271,6 +313,7 @@ mod tests {
         let err = add_profile_to_text_in(
             Some(existing),
             Path::new("/home"),
+            CODEX,
             "codex_lemon",
             "~/.codex-lemon",
         )
@@ -282,14 +325,16 @@ mod tests {
     #[test]
     fn add_rejects_invalid_profile_name() {
         assert!(
-            add_profile_to_text_in(None, Path::new("/home"), "bad.name", "~/.codex-bad").is_err()
+            add_profile_to_text_in(None, Path::new("/home"), CODEX, "bad.name", "~/.codex-bad")
+                .is_err()
         );
     }
 
     #[test]
     fn add_rejects_relative_home_dir() {
         assert!(
-            add_profile_to_text_in(None, Path::new("/home"), "codex_lemon", "relative").is_err()
+            add_profile_to_text_in(None, Path::new("/home"), CODEX, "codex_lemon", "relative")
+                .is_err()
         );
     }
 
@@ -298,7 +343,7 @@ mod tests {
         let tmp = tempdir();
         let config = tmp.path().join(".config/aiwitch/profiles.toml");
         let outcome =
-            add_to_config_with_auth(&config, tmp.path(), "codex_lemon", None, None).unwrap();
+            add_to_config_with_auth(&config, tmp.path(), CODEX, "codex_lemon", None, None).unwrap();
 
         assert_eq!(outcome.profile, "codex_lemon");
         assert_eq!(outcome.home_dir, "~/.codex-codex_lemon");
@@ -324,6 +369,7 @@ mod tests {
         let outcome = add_to_config_with_auth(
             &config,
             tmp.path(),
+            CODEX,
             "lemon",
             Some(Path::new("~/.codex-lemon")),
             None,
@@ -352,6 +398,7 @@ mod tests {
         let err = add_to_config_with_auth(
             &config,
             tmp.path(),
+            CODEX,
             "lemon",
             Some(Path::new("~/.codex-other")),
             None,
@@ -370,6 +417,7 @@ mod tests {
         let outcome = add_to_config_with_auth(
             &config,
             tmp.path(),
+            CODEX,
             "codex_api",
             None,
             Some(CodexAuthMode::Api),
@@ -391,6 +439,7 @@ mod tests {
         let outcome = add_to_config_with_auth(
             &config,
             tmp.path(),
+            CODEX,
             "codex_chat",
             None,
             Some(CodexAuthMode::Chatgpt),
@@ -400,30 +449,6 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(outcome.expanded_home.join("config.toml")).unwrap(),
             "forced_login_method = \"chatgpt\"\ncli_auth_credentials_store = \"file\"\n"
-        );
-    }
-
-    #[test]
-    fn add_and_render_env_returns_switch_snippet_only() {
-        let tmp = tempdir();
-        let config = tmp.path().join(".config/aiwitch/profiles.toml");
-
-        let out = add_to_config_and_render_env(
-            &config,
-            tmp.path(),
-            "codex_key",
-            None,
-            Some(CodexAuthMode::Api),
-            crate::shell::EnvFormat::Posix,
-        )
-        .unwrap();
-
-        assert_eq!(
-            out,
-            format!(
-                "export CODEX_HOME='{}'\nexport AIWITCH_CURRENT='codex_key'\n",
-                tmp.path().join(".codex-codex_key").display()
-            )
         );
     }
 
@@ -440,6 +465,7 @@ mod tests {
         add_to_config_with_auth(
             &tmp.path().join("profiles.toml"),
             tmp.path(),
+            CODEX,
             "codex_existing",
             Some(tmp.path()),
             Some(CodexAuthMode::Chatgpt),
@@ -461,6 +487,7 @@ mod tests {
         add_to_config_with_auth(
             &tmp.path().join("profiles.toml"),
             tmp.path(),
+            CODEX,
             "codex_existing",
             Some(tmp.path()),
             Some(CodexAuthMode::Api),
@@ -486,6 +513,7 @@ mod tests {
         add_to_config_with_auth(
             &tmp.path().join("profiles.toml"),
             tmp.path(),
+            CODEX,
             "codex_existing",
             Some(tmp.path()),
             Some(CodexAuthMode::Api),
