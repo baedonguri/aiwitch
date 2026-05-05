@@ -9,16 +9,11 @@ pub enum Shell {
 }
 
 /** Output flavor for `aiwitch env`. POSIX covers zsh/bash/sh/dash; Fish is its own. */
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum EnvFormat {
+    #[default]
     Posix,
     Fish,
-}
-
-impl Default for EnvFormat {
-    fn default() -> Self {
-        EnvFormat::Posix
-    }
 }
 
 /** POSIX single-quote escape. Wraps the value in `'...'` and replaces `'` with `'\''`.
@@ -51,8 +46,7 @@ pub fn validate_profile_name(name: &str) -> Result<()> {
         .all(|b| b.is_ascii_alphanumeric() || *b == b'_' || *b == b'-');
     if !ok {
         return Err(anyhow!(
-            "invalid profile name {:?}: only [A-Za-z0-9_-] allowed",
-            name
+            "invalid profile name {name:?}: only [A-Za-z0-9_-] allowed"
         ));
     }
     Ok(())
@@ -62,10 +56,12 @@ pub fn validate_profile_name(name: &str) -> Result<()> {
  *  emit between single quotes inside a shell `eval`. Callers must run this
  *  before `sh_quote`. */
 pub fn validate_env_value(value: &str) -> Result<()> {
-    if let Some(bad) = value.chars().find(|c| *c == '\0' || (c.is_control() && *c != ' ')) {
+    if let Some(bad) = value
+        .chars()
+        .find(|c| *c == '\0' || (c.is_control() && *c != ' '))
+    {
         return Err(anyhow!(
-            "env value contains forbidden control character {:?}",
-            bad
+            "env value contains forbidden control character {bad:?}"
         ));
     }
     Ok(())
@@ -160,7 +156,7 @@ const POSIX_INIT: &str = r#"aiwitch() {
 }
 "#;
 
-const FISH_INIT: &str = r#"function aiwitch
+const FISH_INIT: &str = r"function aiwitch
   switch $argv[1]
     case add
       set -l __aiwitch_env (command aiwitch add --print-env --shell=fish $argv[2..]); or return $status
@@ -173,7 +169,7 @@ const FISH_INIT: &str = r#"function aiwitch
       command aiwitch $argv
   end
 end
-"#;
+";
 
 #[cfg(test)]
 mod tests {
@@ -466,7 +462,10 @@ mod tests {
     fn init_snippet_posix_propagates_failure_and_forwards_args() {
         let s = init_snippet(Shell::Zsh);
         assert!(s.contains("|| return $?"), "must propagate exit status");
-        assert!(s.contains("\"$@\""), "must forward all remaining args after shift");
+        assert!(
+            s.contains("\"$@\""),
+            "must forward all remaining args after shift"
+        );
         assert!(s.contains("shift"));
     }
 
@@ -492,7 +491,10 @@ mod tests {
     #[test]
     fn init_snippet_fish_propagates_failure_and_forwards_args() {
         let s = init_snippet(Shell::Fish);
-        assert!(s.contains("or return $status"), "must propagate exit status");
+        assert!(
+            s.contains("or return $status"),
+            "must propagate exit status"
+        );
         assert!(s.contains("$argv[2..]"), "must forward all remaining args");
     }
 

@@ -10,7 +10,7 @@ pub mod store;
 pub struct Profile {
     pub name: String,
     pub backend: BackendKind,
-    /** Backend state root (e.g. CODEX_HOME). Always absolute after loading. */
+    /** Backend state root (e.g. `CODEX_HOME`). Always absolute after loading. */
     pub home_dir: PathBuf,
 }
 

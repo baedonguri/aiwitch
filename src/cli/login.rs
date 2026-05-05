@@ -2,13 +2,13 @@ use crate::backend::{AnyBackend, Backend, LoginMode, ProviderCommand};
 use crate::error::{Context, Result};
 #[cfg(test)]
 use crate::profile::ProfilesFile;
-use crate::profile::{store, Profile};
+use crate::profile::{Profile, store};
 use crate::shell::validate_profile_name;
 use anyhow::ensure;
 use std::io::{Read, Write};
 use std::ops::Range;
 use std::process::{Command, Stdio};
-use std::sync::atomic::{compiler_fence, Ordering};
+use std::sync::atomic::{Ordering, compiler_fence};
 
 const MAX_API_KEY_INPUT_BYTES: u64 = 8192;
 
@@ -144,8 +144,13 @@ impl ApiKeyInput {
 }
 
 impl Drop for ApiKeyInput {
+    #[allow(unsafe_code)]
+    /** Volatile zeroing of secret buffer; required to prevent the optimizer from eliding the write. */
     fn drop(&mut self) {
         for byte in &mut self.input {
+            // SAFETY: `byte` is a unique mutable reference to a valid `u8`
+            // owned by `self.input`. `write_volatile` writes a `u8` to a
+            // properly aligned, non-null pointer, so this is sound.
             unsafe {
                 std::ptr::write_volatile(byte, 0);
             }

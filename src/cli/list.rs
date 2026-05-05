@@ -30,11 +30,11 @@ fn current_profiles<E: EnvLookup>(env: &E, profiles: &ProfilesFile) -> Vec<Strin
     let mut selected = Vec::new();
     let mut selected_backends = Vec::new();
 
-    if let Some(name) = env.get(AIWITCH_CURRENT_KEY) {
-        if let Some(profile) = profiles.profiles.iter().find(|p| p.name == name) {
-            selected.push(profile.name.clone());
-            selected_backends.push(profile.backend);
-        }
+    if let Some(name) = env.get(AIWITCH_CURRENT_KEY)
+        && let Some(profile) = profiles.profiles.iter().find(|p| p.name == name)
+    {
+        selected.push(profile.name.clone());
+        selected_backends.push(profile.backend);
     }
 
     for profile in &profiles.profiles {
@@ -80,8 +80,7 @@ pub fn render(rows: &[(Profile, ProfileMeta)], current: &[String]) -> String {
                 meta.email.clone().unwrap_or_else(|| "-".to_string()),
                 meta.plan.clone().unwrap_or_else(|| "-".to_string()),
                 meta.subscription_until
-                    .map(|dt| dt.format("%Y-%m-%d").to_string())
-                    .unwrap_or_else(|| "-".to_string()),
+                    .map_or_else(|| "-".to_string(), |dt| dt.format("%Y-%m-%d").to_string()),
                 if current.iter().any(|name| name == &profile.name) {
                     CURRENT_MARK.to_string()
                 } else {

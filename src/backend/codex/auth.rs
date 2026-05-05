@@ -9,14 +9,20 @@ pub struct AuthFile {
     pub openai_api_key: Option<String>,
     pub auth_mode: String,
     pub tokens: Option<Tokens>,
+    #[allow(dead_code)]
+    /** Deserialized for schema fidelity; not consumed yet. */
     pub last_refresh: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct Tokens {
     pub id_token: String,
+    #[allow(dead_code)]
+    /** Reserved for future refresh-token flows. */
     pub access_token: String,
+    #[allow(dead_code)]
     pub refresh_token: String,
+    #[allow(dead_code)]
     pub account_id: Option<String>,
 }
 
@@ -26,7 +32,7 @@ impl AuthFile {
     }
 }
 
-/** Reads $CODEX_HOME/auth.json. File-backend only (keyring is v0.1.1+). */
+/** Reads `$CODEX_HOME/auth.json`. File-backend only (keyring is v0.1.1+). */
 pub fn read(codex_home: &Path) -> Result<AuthFile> {
     let path = codex_home.join("auth.json");
     let text = std::fs::read_to_string(&path)

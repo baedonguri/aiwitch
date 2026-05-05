@@ -2,6 +2,7 @@ use super::{Backend, BackendKind, LoginMode, ProfileMeta, ProviderCommand, Provi
 use crate::error::{Context, Result};
 use crate::profile::Profile;
 use anyhow::ensure;
+use std::fmt::Write as _;
 
 pub mod auth;
 pub mod jwt;
@@ -47,16 +48,17 @@ impl Backend for CodexBackend {
             .to_str()
             .with_context(|| {
                 format!(
-                    "profile {:?} home_dir is not valid UTF-8: {:?}",
-                    profile.name, profile.home_dir
+                    "profile {:?} home_dir is not valid UTF-8: {}",
+                    profile.name,
+                    profile.home_dir.display()
                 )
             })?
             .to_string();
         ensure!(
             profile.home_dir.is_absolute(),
-            "profile {:?} home_dir must be absolute: {:?}",
+            "profile {:?} home_dir must be absolute: {}",
             profile.name,
-            profile.home_dir
+            profile.home_dir.display()
         );
         Ok(vec![("CODEX_HOME".to_string(), home)])
     }
@@ -78,10 +80,9 @@ impl Backend for CodexBackend {
             return Ok(ProfileMeta::default());
         };
         let payload = jwt::decode_payload(&tokens.id_token)?;
-        let (plan, subscription_until) = payload
-            .openai_auth
-            .map(|a| (a.chatgpt_plan_type, a.chatgpt_subscription_active_until))
-            .unwrap_or((None, None));
+        let (plan, subscription_until) = payload.openai_auth.map_or((None, None), |a| {
+            (a.chatgpt_plan_type, a.chatgpt_subscription_active_until)
+        });
         Ok(ProfileMeta {
             email: payload.email,
             plan,
@@ -146,10 +147,11 @@ fn write_auth_config(codex_home: &std::path::Path, auth: LoginMode) -> Result<()
 
     let mut prefix = String::new();
     if !has_root_toml_key(&existing, "forced_login_method") {
-        prefix.push_str(&format!(
-            "forced_login_method = \"{}\"\n",
+        let _ = writeln!(
+            prefix,
+            "forced_login_method = \"{}\"",
             auth_config_value(auth)
-        ));
+        );
     }
     if !has_root_toml_key(&existing, "cli_auth_credentials_store") {
         prefix.push_str("cli_auth_credentials_store = \"file\"\n");

@@ -2,6 +2,7 @@
 name = "aiwitch"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.85"
 description = "Multi-account / multi-profile switcher for AI CLIs (Codex, …)"
 license = "MIT"
 repository = "https://github.com/baedonguri/aiwitch"
@@ -19,3 +20,18 @@ anyhow = "1"
 lto = true
 codegen-units = 1
 strip = true
+
+[lints.rust]
+unsafe_code = "deny"
+unused_must_use = "deny"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+# Practical exceptions
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+manual_let_else = "allow"
+cast_possible_truncation = "allow"
+unnecessary_wraps = "allow"
