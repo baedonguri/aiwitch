@@ -10,7 +10,8 @@ Initial public release.
 
 ### Added
 - **Codex backend** with multi-profile switching backed by `~/.config/aiwitch/profiles.toml`.
-- **`add`** — register a Codex profile, optionally provisioning its `CODEX_HOME` and login mode.
+- **`add <provider> <profile>`** — register a profile, provision its provider home directory, and run the provider's login flow (defaults to ChatGPT login; pass `--auth api` to log in with an API key from stdin). Provider name is required; today only `codex` is supported.
+- Actionable error hints on duplicate profile name, missing/uninstalled provider CLI, login exit failure, and missing piped API key.
 - **`list`** — show profiles with email, plan, and token expiry; marks the active profile per backend.
 - **`current`** — print the currently active profile name.
 - **`env`** — emit `export` (POSIX) or `set -gx` (fish) statements for `eval`/`source` integration.

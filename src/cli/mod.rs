@@ -21,8 +21,9 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Command {
-    /** Add a Codex profile. */
+    /** Add a profile for the given provider and run its login flow (e.g. `aiwitch add codex personal`). */
     Add {
+        provider: ProviderArg,
         profile: String,
         #[arg(long = "home")]
         home: Option<std::path::PathBuf>,
@@ -72,6 +73,20 @@ enum ShellKind {
     Fish,
 }
 
+/** CLI-facing provider name. Today only `codex` is supported; clap enforces that. */
+#[derive(clap::ValueEnum, Clone, Copy, Debug)]
+enum ProviderArg {
+    Codex,
+}
+
+impl From<ProviderArg> for crate::backend::BackendKind {
+    fn from(p: ProviderArg) -> Self {
+        match p {
+            ProviderArg::Codex => crate::backend::BackendKind::Codex,
+        }
+    }
+}
+
 /** Output flavor for `aiwitch env`. Separate from `ShellKind` because zsh and bash
  *  share POSIX output, so a 3-way enum here would expose meaningless variants. */
 #[derive(clap::ValueEnum, Clone, Copy, Debug)]
@@ -93,12 +108,20 @@ pub fn run() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Command::Add {
+            provider,
             profile,
             home,
             auth,
             print_env,
             shell,
-        } => add::run(&profile, home.as_deref(), auth, print_env, shell.into()),
+        } => add::run(
+            provider.into(),
+            &profile,
+            home.as_deref(),
+            auth,
+            print_env,
+            shell.into(),
+        ),
         Command::List => list::run(),
         Command::Current => current::run(),
         Command::Env { profile, shell } => env::run(&profile, shell.into()),

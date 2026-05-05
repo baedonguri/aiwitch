@@ -4,9 +4,10 @@ use crate::error::{Context, Result};
 use crate::profile::ProfilesFile;
 use crate::profile::{Profile, store};
 use crate::shell::validate_profile_name;
-use anyhow::ensure;
+use anyhow::{anyhow, ensure};
 use std::io::{Read, Write};
 use std::ops::Range;
+use std::os::fd::AsFd;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{Ordering, compiler_fence};
 
@@ -23,10 +24,31 @@ pub fn run(profile_name: &str, api_key: bool) -> Result<()> {
     } else {
         None
     };
-    run_command(spec, api_key_input)
+    run_command(
+        spec,
+        api_key_input,
+        &RunOptions {
+            profile_name: Some(profile.name.clone()),
+            ..RunOptions::default()
+        },
+    )
 }
 
-fn run_command(spec: ProviderCommand, api_key_input: Option<ApiKeyInput>) -> Result<()> {
+#[derive(Debug, Default, Clone)]
+pub(super) struct RunOptions {
+    /** Redirect the child's stdout to the parent's stderr. Used by callers that
+     *  capture aiwitch stdout (e.g. `aiwitch add --print-env`) so login output
+     *  doesn't end up inside the captured shell snippet. */
+    pub redirect_stdout_to_stderr: bool,
+    /** Profile name embedded in retry hints when login exits non-zero. */
+    pub profile_name: Option<String>,
+}
+
+pub(super) fn run_command(
+    spec: ProviderCommand,
+    api_key_input: Option<ApiKeyInput>,
+    options: &RunOptions,
+) -> Result<()> {
     let ProviderCommand {
         program,
         args,
@@ -41,11 +63,15 @@ fn run_command(spec: ProviderCommand, api_key_input: Option<ApiKeyInput>) -> Res
         } else {
             Stdio::inherit()
         })
-        .stdout(Stdio::inherit())
+        .stdout(if options.redirect_stdout_to_stderr {
+            Stdio::from(std::io::stderr().as_fd().try_clone_to_owned()?)
+        } else {
+            Stdio::inherit()
+        })
         .stderr(Stdio::inherit());
-    let mut child = command
-        .spawn()
-        .with_context(|| format!("failed to run {program}"))?;
+    let mut child = command.spawn().with_context(|| {
+        format!("failed to run {program}\nhint: install the {program} CLI and ensure it is on PATH")
+    })?;
     if let Some(key) = api_key_input {
         let mut stdin = child
             .stdin
@@ -62,7 +88,15 @@ fn run_command(spec: ProviderCommand, api_key_input: Option<ApiKeyInput>) -> Res
         .wait()
         .with_context(|| format!("failed to wait for {program}"))?;
 
-    ensure!(status.success(), "{program} login exited with {status}");
+    let retry_target = options
+        .profile_name
+        .as_deref()
+        .unwrap_or("<profile>")
+        .to_string();
+    ensure!(
+        status.success(),
+        "{program} login exited with {status}\nhint: if you canceled the login, retry with `aiwitch login {retry_target}`"
+    );
     Ok(())
 }
 
@@ -78,7 +112,7 @@ fn command_spec(
     command_spec_for_profile(&backend, profile, api_key)
 }
 
-fn command_spec_for_profile(
+pub(super) fn command_spec_for_profile(
     backend: &AnyBackend,
     profile: &Profile,
     api_key: bool,
@@ -91,7 +125,7 @@ fn command_spec_for_profile(
     backend.login_command(profile, mode)
 }
 
-fn read_api_key_from_stdin(backend: &AnyBackend) -> Result<ApiKeyInput> {
+pub(super) fn read_api_key_from_stdin(backend: &AnyBackend) -> Result<ApiKeyInput> {
     read_api_key_from_reader(backend, std::io::stdin().lock())
 }
 
@@ -105,14 +139,18 @@ fn read_api_key_from_reader<R: Read>(backend: &AnyBackend, reader: R) -> Result<
         input.len() <= MAX_API_KEY_INPUT_BYTES as usize,
         "API key input is too large"
     );
-    ApiKeyInput::from_string(backend, input)
+    ApiKeyInput::from_string(backend, input).map_err(|e| {
+        anyhow!(
+            "{e}\nhint: pipe your API key, e.g. `echo \"$OPENAI_API_KEY\" | aiwitch add codex <profile> --auth api`"
+        )
+    })
 }
 
 fn normalize_api_key<'a>(backend: &AnyBackend, input: &'a str) -> Result<&'a str> {
     backend.normalize_api_key(input)
 }
 
-struct ApiKeyInput {
+pub(super) struct ApiKeyInput {
     input: Vec<u8>,
     key_range: Range<usize>,
 }
