@@ -97,7 +97,7 @@ impl Backend for CodexBackend {
         login_command(profile, mode)
     }
 
-    fn normalize_api_key(&self, input: &str) -> Result<String> {
+    fn normalize_api_key<'a>(&self, input: &'a str) -> Result<&'a str> {
         normalize_api_key(input)
     }
 
@@ -107,6 +107,7 @@ impl Backend for CodexBackend {
             "CodexBackend received non-codex profile {:?}",
             profile.name
         );
+        prepare_home_dir(&profile.home_dir)?;
         if let Some(auth_mode) = options.auth_mode {
             write_auth_config(&profile.home_dir, auth_mode)?;
         }
@@ -114,7 +115,7 @@ impl Backend for CodexBackend {
     }
 }
 
-pub fn normalize_api_key(input: &str) -> Result<String> {
+pub fn normalize_api_key(input: &str) -> Result<&str> {
     let key = input.trim();
     ensure!(!key.is_empty(), "OpenAI API key is empty");
     ensure!(
@@ -129,12 +130,11 @@ pub fn normalize_api_key(input: &str) -> Result<String> {
         key.starts_with("sk-"),
         "Codex API key login requires an OpenAI API key (expected sk-... or sk-proj-...)"
     );
-    Ok(key.to_string())
+    Ok(key)
 }
 
 fn write_auth_config(codex_home: &std::path::Path, auth: LoginMode) -> Result<()> {
-    std::fs::create_dir_all(codex_home)
-        .with_context(|| format!("failed to create {}", codex_home.display()))?;
+    prepare_home_dir(codex_home)?;
     let path = codex_home.join("config.toml");
     let existing = match std::fs::read_to_string(&path) {
         Ok(text) => text,
@@ -157,6 +157,25 @@ fn write_auth_config(codex_home: &std::path::Path, auth: LoginMode) -> Result<()
 
     let updated = insert_root_toml_keys(prefix, existing);
     std::fs::write(&path, updated).with_context(|| format!("failed to write {}", path.display()))
+}
+
+fn prepare_home_dir(path: &std::path::Path) -> Result<()> {
+    std::fs::create_dir_all(path)
+        .with_context(|| format!("failed to create {}", path.display()))?;
+    restrict_dir_permissions(path)
+}
+
+#[cfg(unix)]
+fn restrict_dir_permissions(path: &std::path::Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
+        .with_context(|| format!("failed to restrict permissions for {}", path.display()))
+}
+
+#[cfg(not(unix))]
+fn restrict_dir_permissions(_path: &std::path::Path) -> Result<()> {
+    Ok(())
 }
 
 fn auth_config_value(auth: LoginMode) -> &'static str {
@@ -383,6 +402,13 @@ mod tests {
             std::fs::read_to_string(tmp.path().join("config.toml")).unwrap(),
             "forced_login_method = \"api\"\ncli_auth_credentials_store = \"file\"\n"
         );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let mode = std::fs::metadata(tmp.path()).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o700);
+        }
     }
 
     #[test]
@@ -415,6 +441,13 @@ mod tests {
             .unwrap();
 
         assert!(!tmp.path().join("config.toml").exists());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let mode = std::fs::metadata(tmp.path()).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o700);
+        }
     }
 
     struct TempDir(PathBuf);

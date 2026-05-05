@@ -2,11 +2,15 @@ use crate::backend::{AnyBackend, Backend, LoginMode, ProviderCommand};
 use crate::error::{Context, Result};
 #[cfg(test)]
 use crate::profile::ProfilesFile;
-use crate::profile::{Profile, store};
+use crate::profile::{store, Profile};
 use crate::shell::validate_profile_name;
 use anyhow::ensure;
 use std::io::{Read, Write};
+use std::ops::Range;
 use std::process::{Command, Stdio};
+use std::sync::atomic::{compiler_fence, Ordering};
+
+const MAX_API_KEY_INPUT_BYTES: u64 = 8192;
 
 pub fn run(profile_name: &str, api_key: bool) -> Result<()> {
     validate_profile_name(profile_name)?;
@@ -22,7 +26,7 @@ pub fn run(profile_name: &str, api_key: bool) -> Result<()> {
     run_command(spec, api_key_input)
 }
 
-fn run_command(spec: ProviderCommand, api_key_input: Option<String>) -> Result<()> {
+fn run_command(spec: ProviderCommand, api_key_input: Option<ApiKeyInput>) -> Result<()> {
     let ProviderCommand {
         program,
         args,
@@ -47,7 +51,12 @@ fn run_command(spec: ProviderCommand, api_key_input: Option<String>) -> Result<(
             .stdin
             .take()
             .with_context(|| format!("failed to open {program} stdin"))?;
-        writeln!(stdin, "{key}").with_context(|| format!("failed to write {program} stdin"))?;
+        stdin
+            .write_all(key.as_bytes())
+            .with_context(|| format!("failed to write {program} stdin"))?;
+        stdin
+            .write_all(b"\n")
+            .with_context(|| format!("failed to write {program} stdin"))?;
     }
     let status = child
         .wait()
@@ -82,16 +91,67 @@ fn command_spec_for_profile(
     backend.login_command(profile, mode)
 }
 
-fn read_api_key_from_stdin(backend: &AnyBackend) -> Result<String> {
-    let mut input = String::new();
-    std::io::stdin()
-        .read_to_string(&mut input)
-        .context("failed to read API key from stdin")?;
-    normalize_api_key(backend, &input)
+fn read_api_key_from_stdin(backend: &AnyBackend) -> Result<ApiKeyInput> {
+    read_api_key_from_reader(backend, std::io::stdin().lock())
 }
 
-fn normalize_api_key(backend: &AnyBackend, input: &str) -> Result<String> {
+fn read_api_key_from_reader<R: Read>(backend: &AnyBackend, reader: R) -> Result<ApiKeyInput> {
+    let mut input = String::new();
+    reader
+        .take(MAX_API_KEY_INPUT_BYTES + 1)
+        .read_to_string(&mut input)
+        .context("failed to read API key from stdin")?;
+    ensure!(
+        input.len() <= MAX_API_KEY_INPUT_BYTES as usize,
+        "API key input is too large"
+    );
+    ApiKeyInput::from_string(backend, input)
+}
+
+fn normalize_api_key<'a>(backend: &AnyBackend, input: &'a str) -> Result<&'a str> {
     backend.normalize_api_key(input)
+}
+
+struct ApiKeyInput {
+    input: Vec<u8>,
+    key_range: Range<usize>,
+}
+
+impl ApiKeyInput {
+    fn from_string(backend: &AnyBackend, input: String) -> Result<Self> {
+        let key = normalize_api_key(backend, &input)?;
+        let base = input.as_ptr() as usize;
+        let start = key.as_ptr() as usize;
+        let offset = start
+            .checked_sub(base)
+            .with_context(|| "normalized API key was not derived from stdin input")?;
+        let end = offset
+            .checked_add(key.len())
+            .with_context(|| "normalized API key was not derived from stdin input")?;
+        ensure!(
+            end <= input.len(),
+            "normalized API key was not derived from stdin input"
+        );
+        Ok(Self {
+            input: input.into_bytes(),
+            key_range: offset..end,
+        })
+    }
+
+    fn as_bytes(&self) -> &[u8] {
+        &self.input[self.key_range.clone()]
+    }
+}
+
+impl Drop for ApiKeyInput {
+    fn drop(&mut self) {
+        for byte in &mut self.input {
+            unsafe {
+                std::ptr::write_volatile(byte, 0);
+            }
+        }
+        compiler_fence(Ordering::SeqCst);
+    }
 }
 
 #[cfg(test)]
@@ -99,6 +159,7 @@ mod tests {
     use super::*;
     use crate::backend::BackendKind;
     use crate::profile::{Profile, ProfilesFile};
+    use std::io::Cursor;
     use std::path::PathBuf;
 
     fn profiles() -> ProfilesFile {
@@ -161,6 +222,25 @@ mod tests {
         let key = normalize_api_key(&backend(), "sk-test1234567890").unwrap();
 
         assert_eq!(key, "sk-test1234567890");
+    }
+
+    #[test]
+    fn read_api_key_from_reader_trims_and_keeps_key_bytes() {
+        let key = read_api_key_from_reader(&backend(), Cursor::new("  sk-proj-test1234567890\n"))
+            .unwrap();
+
+        assert_eq!(key.as_bytes(), b"sk-proj-test1234567890");
+    }
+
+    #[test]
+    fn read_api_key_from_reader_rejects_oversized_input() {
+        let input = "x".repeat(MAX_API_KEY_INPUT_BYTES as usize + 1);
+        let err = match read_api_key_from_reader(&backend(), Cursor::new(input)) {
+            Ok(_) => panic!("oversized API key input should fail"),
+            Err(err) => err,
+        };
+
+        assert!(format!("{err}").contains("too large"));
     }
 
     #[test]

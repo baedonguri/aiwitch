@@ -47,7 +47,7 @@ pub trait Backend {
 
     fn login_command(&self, profile: &Profile, mode: LoginMode) -> Result<ProviderCommand>;
 
-    fn normalize_api_key(&self, input: &str) -> Result<String>;
+    fn normalize_api_key<'a>(&self, input: &'a str) -> Result<&'a str>;
 
     fn provision(&self, profile: &Profile, options: ProvisionOptions) -> Result<()>;
 }
@@ -85,7 +85,7 @@ impl Backend for AnyBackend {
             AnyBackend::Codex(b) => b.login_command(profile, mode),
         }
     }
-    fn normalize_api_key(&self, input: &str) -> Result<String> {
+    fn normalize_api_key<'a>(&self, input: &'a str) -> Result<&'a str> {
         match self {
             AnyBackend::Codex(b) => b.normalize_api_key(input),
         }
