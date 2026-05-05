@@ -5,6 +5,7 @@ mod add;
 mod current;
 mod env;
 mod list;
+mod login;
 mod shell;
 
 #[derive(Parser, Debug)]
@@ -25,6 +26,12 @@ enum Command {
         profile: String,
         #[arg(long = "home")]
         home: Option<std::path::PathBuf>,
+        #[arg(long = "auth", value_enum)]
+        auth: Option<add::CodexAuthMode>,
+        #[arg(long = "print-env", hide = true)]
+        print_env: bool,
+        #[arg(long = "shell", value_enum, default_value_t = EnvShell::Posix, hide = true)]
+        shell: EnvShell,
     },
     /** List profiles with email, plan, and expiry. */
     List,
@@ -36,6 +43,12 @@ enum Command {
         profile: String,
         #[arg(long = "shell", value_enum, default_value_t = EnvShell::Posix)]
         shell: EnvShell,
+    },
+    /** Login to the provider for the given profile. */
+    Login {
+        profile: String,
+        #[arg(long = "api-key")]
+        api_key: bool,
     },
     /** Emit a shell snippet that wires up the `use` alias. */
     Shell {
@@ -79,10 +92,17 @@ impl From<EnvShell> for crate::shell::EnvFormat {
 pub fn run() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        Command::Add { profile, home } => add::run(&profile, home.as_deref()),
+        Command::Add {
+            profile,
+            home,
+            auth,
+            print_env,
+            shell,
+        } => add::run(&profile, home.as_deref(), auth, print_env, shell.into()),
         Command::List => list::run(),
         Command::Current => current::run(),
         Command::Env { profile, shell } => env::run(&profile, shell.into()),
+        Command::Login { profile, api_key } => login::run(&profile, api_key),
         Command::Shell { sub } => match sub {
             ShellCmd::Init { shell } => shell::run_init(shell),
         },
