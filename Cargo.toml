@@ -3,7 +3,7 @@ name = "aiwitch"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
-description = "Multi-account / multi-profile switcher for AI CLIs (Codex, …)"
+description = "Multi-account / multi-profile switcher for AI CLIs (Codex, Claude Code, …)"
 license = "MIT"
 repository = "https://github.com/baedonguri/aiwitch"
 

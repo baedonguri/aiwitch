@@ -73,16 +73,18 @@ enum ShellKind {
     Fish,
 }
 
-/** CLI-facing provider name. Today only `codex` is supported; clap enforces that. */
+/** CLI-facing provider name. Clap enforces the allowed set. */
 #[derive(clap::ValueEnum, Clone, Copy, Debug)]
 enum ProviderArg {
     Codex,
+    Claude,
 }
 
 impl From<ProviderArg> for crate::backend::BackendKind {
     fn from(p: ProviderArg) -> Self {
         match p {
             ProviderArg::Codex => crate::backend::BackendKind::Codex,
+            ProviderArg::Claude => crate::backend::BackendKind::Claude,
         }
     }
 }

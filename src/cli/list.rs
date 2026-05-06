@@ -110,6 +110,7 @@ pub fn render(rows: &[(Profile, ProfileMeta)], current: &[String]) -> String {
 fn provider_label(kind: BackendKind) -> &'static str {
     match kind {
         BackendKind::Codex => "codex",
+        BackendKind::Claude => "claude",
     }
 }
 
