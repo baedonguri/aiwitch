@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Claude Code backend.** `aiwitch add claude <profile>` provisions an isolated `CLAUDE_CONFIG_DIR` (defaults to `~/.claude-<profile>`, mode `0700`) and spawns the `claude` TUI for interactive `/login`. `aiwitch list` shows `provider = claude`.
+- **Best-effort Claude metadata.** `aiwitch list` reads `<CLAUDE_CONFIG_DIR>/.credentials.json` when present (Linux/Windows) and surfaces `email`, `subscription_type`, and `expires_at` (ms or seconds). On macOS, Claude Code stores credentials in the system Keychain, so these columns will typically render as `-` even after a successful login — that's expected, not a bug.
+
+### Changed
+- `aiwitch add` now derives the printed `next:` hint and `--print-env` snippet from each backend's `env_exports`, so Claude profiles emit `CLAUDE_CONFIG_DIR=...` instead of `CODEX_HOME=...`.
+- `--auth` is rejected for `claude` (and `aiwitch login <claude-profile> --api-key` errors before stdin is read), since Claude does not have an API-key login flow yet.
+
 ## [v0.1.0] — 2026-05-05
 
 Initial public release.

@@ -110,6 +110,11 @@ home_dir = "~/.codex-personal"
 name = "work"
 backend = "codex"
 home_dir = "~/.codex-work"
+
+[[profiles]]
+name = "claude-personal"
+backend = "claude"
+home_dir = "~/.claude-personal"
 "#
 }
 
@@ -247,8 +252,8 @@ home_dir = "/abs/codex-work"
             r#"
 [[profiles]]
 name = "x"
-backend = "claude"
-home_dir = "~/.claude"
+backend = "gemini"
+home_dir = "~/.gemini"
 "#,
         )
         .unwrap();

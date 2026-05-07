@@ -3,12 +3,14 @@ use crate::profile::Profile;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+pub mod claude;
 pub mod codex;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum BackendKind {
     Codex,
+    Claude,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -56,12 +58,14 @@ pub trait Backend {
 
 pub enum AnyBackend {
     Codex(codex::CodexBackend),
+    Claude(claude::ClaudeBackend),
 }
 
 impl AnyBackend {
     pub fn from_kind(kind: BackendKind) -> Self {
         match kind {
             BackendKind::Codex => AnyBackend::Codex(codex::CodexBackend),
+            BackendKind::Claude => AnyBackend::Claude(claude::ClaudeBackend),
         }
     }
 }
@@ -70,31 +74,37 @@ impl Backend for AnyBackend {
     fn id(&self) -> BackendKind {
         match self {
             AnyBackend::Codex(b) => b.id(),
+            AnyBackend::Claude(b) => b.id(),
         }
     }
     fn env_exports(&self, profile: &Profile) -> Result<Vec<(String, String)>> {
         match self {
             AnyBackend::Codex(b) => b.env_exports(profile),
+            AnyBackend::Claude(b) => b.env_exports(profile),
         }
     }
     fn read_meta(&self, profile: &Profile) -> Result<ProfileMeta> {
         match self {
             AnyBackend::Codex(b) => b.read_meta(profile),
+            AnyBackend::Claude(b) => b.read_meta(profile),
         }
     }
     fn login_command(&self, profile: &Profile, mode: LoginMode) -> Result<ProviderCommand> {
         match self {
             AnyBackend::Codex(b) => b.login_command(profile, mode),
+            AnyBackend::Claude(b) => b.login_command(profile, mode),
         }
     }
     fn normalize_api_key<'a>(&self, input: &'a str) -> Result<&'a str> {
         match self {
             AnyBackend::Codex(b) => b.normalize_api_key(input),
+            AnyBackend::Claude(b) => b.normalize_api_key(input),
         }
     }
     fn provision(&self, profile: &Profile, options: ProvisionOptions) -> Result<()> {
         match self {
             AnyBackend::Codex(b) => b.provision(profile, options),
+            AnyBackend::Claude(b) => b.provision(profile, options),
         }
     }
 }

@@ -313,4 +313,45 @@ mod tests {
 
         assert!(format!("{err}").contains("whitespace"));
     }
+
+    #[test]
+    fn command_spec_for_profile_rejects_api_key_for_claude() {
+        // Claude does not support API-key login in v1. The error must surface at
+        // spec construction so `aiwitch login <claude-profile> --api-key` fails
+        // before stdin is ever read.
+        let claude = AnyBackend::from_kind(BackendKind::Claude);
+        let profile = Profile {
+            name: "p".to_string(),
+            backend: BackendKind::Claude,
+            home_dir: PathBuf::from("/abs/.claude-p"),
+        };
+
+        let err = command_spec_for_profile(&claude, &profile, true).unwrap_err();
+
+        let msg = format!("{err}");
+        assert!(msg.contains("not supported"));
+        assert!(msg.contains("/login"));
+    }
+
+    #[test]
+    fn command_spec_for_profile_returns_claude_program_for_interactive() {
+        let claude = AnyBackend::from_kind(BackendKind::Claude);
+        let profile = Profile {
+            name: "p".to_string(),
+            backend: BackendKind::Claude,
+            home_dir: PathBuf::from("/abs/.claude-p"),
+        };
+
+        let spec = command_spec_for_profile(&claude, &profile, false).unwrap();
+
+        assert_eq!(spec.program, "claude");
+        assert!(spec.args.is_empty());
+        assert_eq!(
+            spec.envs,
+            vec![(
+                "CLAUDE_CONFIG_DIR".to_string(),
+                "/abs/.claude-p".to_string()
+            )]
+        );
+    }
 }
