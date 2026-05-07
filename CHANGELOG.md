@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.2.0] — 2026-05-08
+
 ### Added
 - **Claude Code backend.** `aiwitch add claude <profile>` provisions an isolated `CLAUDE_CONFIG_DIR` (defaults to `~/.claude-<profile>`, mode `0700`) and spawns the `claude` TUI for interactive `/login`. `aiwitch list` shows `provider = claude`.
 - **Best-effort Claude metadata.** `aiwitch list` reads `<CLAUDE_CONFIG_DIR>/.credentials.json` when present (Linux/Windows) and surfaces `email`, `subscription_type`, and `expires_at` (ms or seconds). On macOS, Claude Code stores credentials in the system Keychain, so these columns will typically render as `-` even after a successful login — that's expected, not a bug.
@@ -35,4 +37,5 @@ Initial public release.
 - Lint baseline: `rustfmt`, `clippy` with `pedantic` warn + curated allows, `unsafe_code = "deny"` with one localized `allow` for volatile secret zeroing.
 - CI on GitHub Actions: `fmt`, `clippy`, matrix `test` (ubuntu, macos), and `doc` jobs. `clippy`/`test`/`doc`/release build run `--locked`; `clippy`/`test`/`doc`/release build run `--all-features`; `doc` enforces `RUSTDOCFLAGS=-D warnings`.
 
+[v0.2.0]: https://github.com/baedonguri/aiwitch/compare/v0.1.0...v0.2.0
 [v0.1.0]: https://github.com/baedonguri/aiwitch/releases/tag/v0.1.0

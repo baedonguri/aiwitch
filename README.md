@@ -100,7 +100,7 @@ brew install aiwitch
 Requires Rust 1.85+.
 
 ```sh
-cargo install --git https://github.com/baedonguri/aiwitch --tag v0.1.0
+cargo install --git https://github.com/baedonguri/aiwitch --tag v0.2.0
 ```
 
 ## Shell setup
