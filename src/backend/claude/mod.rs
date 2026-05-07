@@ -1,7 +1,7 @@
 use super::{Backend, BackendKind, LoginMode, ProfileMeta, ProviderCommand, ProvisionOptions};
 use crate::error::{Context, Result};
 use crate::profile::Profile;
-use anyhow::{anyhow, ensure};
+use anyhow::{anyhow, bail, ensure};
 use chrono::{DateTime, Utc};
 
 pub mod auth;
@@ -11,7 +11,8 @@ pub struct ClaudeBackend;
 /** Threshold above which an `expiresAt` integer is interpreted as Unix epoch
  *  milliseconds. Below this, it is treated as seconds. 10^12 gives us a wide
  *  safety margin: timestamps in seconds stay below ~10^10 well into year 2286,
- *  while millisecond timestamps for any plausible date are above 10^12. */
+ *  while millisecond timestamps for any plausible date are above 10^12. The
+ *  absolute value keeps negative test fixtures unit-symmetric around zero. */
 const MS_THRESHOLD: i64 = 1_000_000_000_000;
 
 impl Backend for ClaudeBackend {
@@ -60,9 +61,7 @@ impl Backend for ClaudeBackend {
         };
 
         let oauth = creds.claude_ai_oauth.unwrap_or_default();
-        let plan = oauth
-            .subscription_type
-            .or_else(|| creds.api_key.as_ref().map(|_| "api-key".to_string()));
+        let plan = oauth.subscription_type;
         let subscription_until = oauth.expires_at.and_then(timestamp_to_datetime);
 
         Ok(ProfileMeta {
@@ -86,8 +85,8 @@ impl Backend for ClaudeBackend {
         }
     }
 
-    fn normalize_api_key<'a>(&self, input: &'a str) -> Result<&'a str> {
-        normalize_api_key(input)
+    fn normalize_api_key<'a>(&self, _input: &'a str) -> Result<&'a str> {
+        bail!("Claude API-key login is not supported (interactive `/login` only)")
     }
 
     fn provision(&self, profile: &Profile, options: ProvisionOptions) -> Result<()> {
@@ -104,24 +103,6 @@ impl Backend for ClaudeBackend {
         );
         prepare_home_dir(&profile.home_dir)
     }
-}
-
-pub fn normalize_api_key(input: &str) -> Result<&str> {
-    let key = input.trim();
-    ensure!(!key.is_empty(), "Anthropic API key is empty");
-    ensure!(
-        !key.chars().any(char::is_whitespace),
-        "Anthropic API key must not contain whitespace"
-    );
-    ensure!(
-        !key.starts_with("sk-") || key.starts_with("sk-ant-"),
-        "Claude API key login requires an Anthropic API key, not an OpenAI key"
-    );
-    ensure!(
-        key.starts_with("sk-ant-"),
-        "Claude API key login requires an Anthropic API key (expected sk-ant-...)"
-    );
-    Ok(key)
 }
 
 fn timestamp_to_datetime(value: i64) -> Option<DateTime<Utc>> {
@@ -234,44 +215,12 @@ mod tests {
     }
 
     #[test]
-    fn normalize_api_key_accepts_anthropic_key() {
-        let key = ClaudeBackend
-            .normalize_api_key("  sk-ant-api03-test1234567890\n")
-            .unwrap();
-
-        assert_eq!(key, "sk-ant-api03-test1234567890");
-    }
-
-    #[test]
-    fn normalize_api_key_rejects_openai_key() {
+    fn normalize_api_key_rejects_unsupported_api_key_login() {
         let err = ClaudeBackend
-            .normalize_api_key("sk-proj-test1234567890")
+            .normalize_api_key("sk-ant-api03-test1234567890")
             .unwrap_err();
 
-        assert!(format!("{err}").contains("OpenAI"));
-    }
-
-    #[test]
-    fn normalize_api_key_rejects_legacy_openai_key() {
-        let err = ClaudeBackend
-            .normalize_api_key("sk-test1234567890")
-            .unwrap_err();
-
-        assert!(format!("{err}").contains("OpenAI"));
-    }
-
-    #[test]
-    fn normalize_api_key_rejects_empty_input() {
-        assert!(ClaudeBackend.normalize_api_key(" \n").is_err());
-    }
-
-    #[test]
-    fn normalize_api_key_rejects_internal_whitespace() {
-        let err = ClaudeBackend
-            .normalize_api_key("sk-ant-test value")
-            .unwrap_err();
-
-        assert!(format!("{err}").contains("whitespace"));
+        assert!(format!("{err}").contains("not supported"));
     }
 
     #[test]
@@ -349,21 +298,6 @@ mod tests {
     }
 
     #[test]
-    fn read_meta_maps_top_level_api_key_to_plan() {
-        let tmp = tempdir();
-        std::fs::write(
-            tmp.path().join(".credentials.json"),
-            r#"{"apiKey":"sk-ant-test"}"#,
-        )
-        .unwrap();
-        let p = profile("p", tmp.path().to_str().unwrap());
-
-        let meta = ClaudeBackend.read_meta(&p).unwrap();
-
-        assert_eq!(meta.plan.as_deref(), Some("api-key"));
-    }
-
-    #[test]
     fn read_meta_handles_expires_at_in_milliseconds() {
         let tmp = tempdir();
         std::fs::write(
@@ -394,6 +328,33 @@ mod tests {
 
         let dt = meta.subscription_until.expect("expected datetime");
         assert_eq!(dt.format("%Y-%m-%d").to_string(), "2025-01-01");
+    }
+
+    #[test]
+    fn timestamp_to_datetime_handles_unit_boundaries() {
+        assert_eq!(timestamp_to_datetime(0).unwrap().timestamp_millis(), 0);
+        assert_eq!(
+            timestamp_to_datetime(MS_THRESHOLD - 1).unwrap().timestamp(),
+            MS_THRESHOLD - 1
+        );
+        assert_eq!(
+            timestamp_to_datetime(MS_THRESHOLD)
+                .unwrap()
+                .timestamp_millis(),
+            MS_THRESHOLD
+        );
+        assert_eq!(
+            timestamp_to_datetime(-(MS_THRESHOLD - 1))
+                .unwrap()
+                .timestamp(),
+            -(MS_THRESHOLD - 1)
+        );
+        assert_eq!(
+            timestamp_to_datetime(-MS_THRESHOLD)
+                .unwrap()
+                .timestamp_millis(),
+            -MS_THRESHOLD
+        );
     }
 
     #[test]

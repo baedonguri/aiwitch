@@ -9,15 +9,11 @@ use std::path::Path;
  *  available" rather than an error.
  *
  *  Real-world Claude installations use a nested camelCase layout under
- *  `claudeAiOauth`. We accept that layout, ignore unknown fields, and tolerate
- *  a top-level api-key field for forward compat with future builds. */
+ *  `claudeAiOauth`. We accept that layout and ignore unknown fields. */
 #[derive(Debug, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct CredentialsFile {
     pub claude_ai_oauth: Option<OAuth>,
-    /** Tolerate `apiKey` (via `rename_all`) and `ANTHROPIC_API_KEY` (legacy/env-style). */
-    #[serde(alias = "ANTHROPIC_API_KEY")]
-    pub api_key: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -79,7 +75,6 @@ mod tests {
         assert_eq!(oauth.email.as_deref(), Some("user@example.com"));
         assert_eq!(oauth.subscription_type.as_deref(), Some("max"));
         assert_eq!(oauth.rate_limit_tier.as_deref(), Some("tier-1"));
-        assert!(creds.api_key.is_none());
     }
 
     #[test]
@@ -106,21 +101,6 @@ mod tests {
         let creds = parse("{}").unwrap();
 
         assert!(creds.claude_ai_oauth.is_none());
-        assert!(creds.api_key.is_none());
-    }
-
-    #[test]
-    fn parse_top_level_api_key_camelcase() {
-        let creds = parse(r#"{"apiKey": "sk-ant-test"}"#).unwrap();
-
-        assert_eq!(creds.api_key.as_deref(), Some("sk-ant-test"));
-    }
-
-    #[test]
-    fn parse_top_level_api_key_anthropic_alias() {
-        let creds = parse(r#"{"ANTHROPIC_API_KEY": "sk-ant-legacy"}"#).unwrap();
-
-        assert_eq!(creds.api_key.as_deref(), Some("sk-ant-legacy"));
     }
 
     #[test]
