@@ -1,0 +1,45 @@
+name: Update Homebrew Tap
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to publish (e.g. v0.3.0)"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  bump-formula:
+    name: Bump aiwitch formula
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "name=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Bump baedonguri/homebrew-tap
+        uses: mislav/bump-homebrew-formula-action@v3
+        with:
+          formula-name: aiwitch
+          formula-path: Formula/aiwitch.rb
+          tag-name: ${{ steps.tag.outputs.name }}
+          download-url: https://github.com/baedonguri/aiwitch/archive/refs/tags/${{ steps.tag.outputs.name }}.tar.gz
+          homebrew-tap: baedonguri/homebrew-tap
+          base-branch: main
+          create-pullrequest: false
+          commit-message: |
+            aiwitch {{version}}
+
+            Created by https://github.com/mislav/bump-homebrew-formula-action
+        env:
+          COMMITTER_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}

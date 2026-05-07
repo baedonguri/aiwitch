@@ -80,8 +80,6 @@ Inspired by `nvm`/`pyenv`-style version switchers, applied to AI CLI accounts.
 
 ## Install
 
-> Homebrew install is enabled once `v0.1.0` is tagged and the tap is published. Until then, use the [from-source](#from-source-any-platform) path.
-
 ### macOS — Homebrew
 
 ```sh
