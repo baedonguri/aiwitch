@@ -6,6 +6,7 @@ mod current;
 mod env;
 mod list;
 mod login;
+mod run;
 mod shell;
 
 #[derive(Parser, Debug)]
@@ -50,6 +51,24 @@ enum Command {
         profile: String,
         #[arg(long = "api-key")]
         api_key: bool,
+    },
+    /** Run a command under the given profile without mutating the current shell. */
+    #[command(long_about = "\
+Run a command under the given profile without mutating the current shell.
+
+Example: `aiwitch run personal -- codex exec \"hi\"`. Use `--` so flags after \
+the profile name are passed to the child instead of consumed by aiwitch.
+
+Inherits the parent environment and overlays the profile's provider env vars \
+(CODEX_HOME / CLAUDE_CONFIG_DIR) plus AIWITCH_CURRENT. Note: other variables \
+are *not* stripped — if OPENAI_API_KEY or ANTHROPIC_API_KEY are exported in \
+the parent shell, the provider CLI may use them instead of the profile's \
+stored credentials. To run with a cleaner environment, use `env -i` or \
+`env -u` from the shell.")]
+    Run {
+        profile: String,
+        #[arg(trailing_var_arg = true, required = true, num_args = 1..)]
+        cmd: Vec<String>,
     },
     /** Emit a shell snippet that wires up the `use` alias. */
     Shell {
@@ -128,6 +147,7 @@ pub fn run() -> Result<()> {
         Command::Current => current::run(),
         Command::Env { profile, shell } => env::run(&profile, shell.into()),
         Command::Login { profile, api_key } => login::run(&profile, api_key),
+        Command::Run { profile, cmd } => run::run(&profile, &cmd),
         Command::Shell { sub } => match sub {
             ShellCmd::Init { shell } => shell::run_init(shell),
         },
@@ -141,5 +161,60 @@ impl From<ShellKind> for crate::shell::Shell {
             ShellKind::Bash => crate::shell::Shell::Bash,
             ShellKind::Fish => crate::shell::Shell::Fish,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    fn parse(args: &[&str]) -> Result<Cli, clap::Error> {
+        Cli::try_parse_from(std::iter::once("aiwitch").chain(args.iter().copied()))
+    }
+
+    fn assert_run(cli: Cli, expected_profile: &str, expected_cmd: &[&str]) {
+        match cli.command {
+            Command::Run { profile, cmd } => {
+                assert_eq!(profile, expected_profile);
+                assert_eq!(cmd, expected_cmd);
+            }
+            other => panic!("expected Run, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn run_parses_with_double_dash_separator() {
+        let cli = parse(&["run", "personal", "--", "codex", "--version"]).unwrap();
+        assert_run(cli, "personal", &["codex", "--version"]);
+    }
+
+    #[test]
+    fn run_parses_without_double_dash_separator() {
+        let cli = parse(&["run", "personal", "codex", "--version"]).unwrap();
+        assert_run(cli, "personal", &["codex", "--version"]);
+    }
+
+    #[test]
+    fn run_passes_through_complex_child_args() {
+        let cli = parse(&["run", "work", "--", "codex", "exec", "hello world"]).unwrap();
+        assert_run(cli, "work", &["codex", "exec", "hello world"]);
+    }
+
+    #[test]
+    fn run_rejects_missing_cmd() {
+        let err = parse(&["run", "personal"]).unwrap_err();
+        assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
+    }
+
+    #[test]
+    fn run_rejects_missing_profile_and_cmd() {
+        assert!(parse(&["run"]).is_err());
+    }
+
+    #[test]
+    fn run_help_flag_works_before_profile() {
+        let err = parse(&["run", "--help"]).unwrap_err();
+        assert_eq!(err.kind(), clap::error::ErrorKind::DisplayHelp);
     }
 }

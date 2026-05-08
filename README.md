@@ -178,6 +178,27 @@ aiwitch use work
 aiwitch current   # → work
 ```
 
+### Run a one-off command under a profile
+
+`aiwitch run <profile> -- <cmd>` spawns `<cmd>` with the profile's provider env vars set, without mutating the current shell. The `--` separator is recommended so flags are passed to the child instead of consumed by `aiwitch`.
+
+```sh
+# Current shell stays on `personal`; just this codex invocation runs as `work`.
+aiwitch run work -- codex exec "fix this bug"
+
+# Useful in CI / scripts where `eval "$(aiwitch env ...)"` is awkward.
+aiwitch run ci-bot -- codex --version
+```
+
+The child inherits the parent environment and `aiwitch` overlays only `CODEX_HOME` / `CLAUDE_CONFIG_DIR` and `AIWITCH_CURRENT`. **Other variables are not stripped** — if `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` are exported in your shell, the provider CLI may use them instead of the profile's stored credentials. To run with a cleaner environment, use standard tools:
+
+```sh
+env -u OPENAI_API_KEY aiwitch run work -- codex   # drop one variable
+env -i HOME="$HOME" PATH="$PATH" aiwitch run work -- codex   # nuke everything else
+```
+
+The exit code of `<cmd>` is propagated; on Unix, signal-terminated children are reported as `128 + signal`.
+
 ### Login
 
 ```sh
