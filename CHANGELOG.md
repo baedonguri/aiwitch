@@ -6,6 +6,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`aiwitch doctor`** — diagnose profile health. Walks each profile and checks home dir existence, login state, and token expiry; globally checks provider CLIs on `PATH` and `AIWITCH_CURRENT` validity. Exits non-zero on `[err]` so it can gate CI.
+
 ## [v0.2.0] — 2026-05-08
 
 ### Added

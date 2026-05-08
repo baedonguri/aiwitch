@@ -3,6 +3,7 @@ use clap::{Parser, Subcommand};
 
 mod add;
 mod current;
+mod doctor;
 mod env;
 mod list;
 mod login;
@@ -39,6 +40,8 @@ enum Command {
     List,
     /** Print the active profile name. */
     Current,
+    /** Diagnose profile health: provider CLI, home dirs, auth state, expiry, env. */
+    Doctor,
     /** Print shell statements for the given profile (intended for `eval` / `source`).
      *  Default output is POSIX (`export K='v'`); pass `--shell=fish` for fish syntax. */
     Env {
@@ -145,6 +148,7 @@ pub fn run() -> Result<()> {
         ),
         Command::List => list::run(),
         Command::Current => current::run(),
+        Command::Doctor => doctor::run(),
         Command::Env { profile, shell } => env::run(&profile, shell.into()),
         Command::Login { profile, api_key } => login::run(&profile, api_key),
         Command::Run { profile, cmd } => run::run(&profile, &cmd),
