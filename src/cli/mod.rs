@@ -7,6 +7,8 @@ mod doctor;
 mod env;
 mod list;
 mod login;
+mod remove;
+mod rename;
 mod run;
 mod shell;
 
@@ -55,6 +57,14 @@ enum Command {
         #[arg(long = "api-key")]
         api_key: bool,
     },
+    /** Remove a profile from `~/.config/aiwitch/profiles.toml`. Pass `--purge` to also delete the profile's default home directory. */
+    Remove {
+        profile: String,
+        #[arg(long)]
+        purge: bool,
+    },
+    /** Rename a profile. If the profile uses the default home directory pattern (`~/.codex-<name>` or `~/.claude-<name>`), the directory on disk is also renamed; custom `home_dir` paths are left untouched. */
+    Rename { old: String, new: String },
     /** Run a command under the given profile without mutating the current shell. */
     #[command(long_about = "\
 Run a command under the given profile without mutating the current shell.
@@ -151,6 +161,8 @@ pub fn run() -> Result<()> {
         Command::Doctor => doctor::run(),
         Command::Env { profile, shell } => env::run(&profile, shell.into()),
         Command::Login { profile, api_key } => login::run(&profile, api_key),
+        Command::Remove { profile, purge } => remove::run(&profile, purge),
+        Command::Rename { old, new } => rename::run(&old, &new),
         Command::Run { profile, cmd } => run::run(&profile, &cmd),
         Command::Shell { sub } => match sub {
             ShellCmd::Init { shell } => shell::run_init(shell),

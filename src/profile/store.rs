@@ -4,6 +4,7 @@ use crate::shell::validate_profile_name;
 use anyhow::{anyhow, ensure};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /** Always `$HOME/.config/aiwitch/profiles.toml`, on every OS. */
 pub fn config_path() -> Result<PathBuf> {
@@ -91,6 +92,59 @@ pub fn load_from(path: &Path, home: &Path) -> Result<ProfilesFile> {
 
     Ok(parsed)
 }
+
+/** Write `contents` to `path` atomically by writing to a sibling temp file in
+ *  the same parent directory, then `rename`-ing onto the target. Same-directory
+ *  rename keeps the operation on a single filesystem so it stays atomic.
+ *
+ *  Does **not** call `fsync` on the temp file or its parent directory. After an
+ *  OS-level crash between write and rename, the target may still hold the old
+ *  contents or end up empty. This is an explicit trade-off: `profiles.toml` is
+ *  small and re-runnable, so the cost of fsync isn't worth the durability gain.
+ *  Callers writing real credentials should not reuse this helper. */
+pub fn write_atomic(path: &Path, contents: &str) -> Result<()> {
+    let parent = path.parent().ok_or_else(|| {
+        anyhow!(
+            "cannot write to path without a parent directory: {}",
+            path.display()
+        )
+    })?;
+    if !parent.as_os_str().is_empty() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+
+    let file_name = path.file_name().ok_or_else(|| {
+        anyhow!(
+            "cannot write to path without a file name: {}",
+            path.display()
+        )
+    })?;
+    let pid = std::process::id();
+    let n = TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let mut tmp_name = file_name.to_os_string();
+    tmp_name.push(format!(".{pid}.{n}.tmp"));
+    let tmp_path = parent.join(&tmp_name);
+
+    if let Err(e) = std::fs::write(&tmp_path, contents) {
+        let _ = std::fs::remove_file(&tmp_path);
+        return Err(
+            anyhow::Error::new(e).context(format!("failed to write {}", tmp_path.display()))
+        );
+    }
+
+    if let Err(e) = std::fs::rename(&tmp_path, path) {
+        let _ = std::fs::remove_file(&tmp_path);
+        return Err(anyhow::Error::new(e).context(format!(
+            "failed to rename {} -> {}",
+            tmp_path.display(),
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 fn read_home() -> Result<PathBuf> {
     let h = std::env::var("HOME").map_err(|_| anyhow!("$HOME is not set"))?;
@@ -368,6 +422,72 @@ home_dir = "~/b"
         .unwrap();
         let err = load_from(&path, Path::new("/Users/x")).unwrap_err();
         assert!(format!("{err}").contains("duplicate"));
+    }
+
+    #[test]
+    fn write_atomic_creates_target_file() {
+        let tmp = tempdir();
+        let target = tmp.path().join("profiles.toml");
+        write_atomic(&target, "hello").unwrap();
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "hello");
+    }
+
+    #[test]
+    fn write_atomic_replaces_existing_file() {
+        let tmp = tempdir();
+        let target = tmp.path().join("profiles.toml");
+        std::fs::write(&target, "old contents").unwrap();
+        write_atomic(&target, "new contents").unwrap();
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "new contents");
+    }
+
+    #[test]
+    fn write_atomic_creates_missing_parent_dir() {
+        let tmp = tempdir();
+        let target = tmp.path().join("nested/dir/profiles.toml");
+        write_atomic(&target, "hi").unwrap();
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "hi");
+    }
+
+    #[test]
+    fn write_atomic_does_not_leave_temp_files_behind_on_success() {
+        let tmp = tempdir();
+        let target = tmp.path().join("profiles.toml");
+        write_atomic(&target, "ok").unwrap();
+        let leftovers: Vec<_> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(leftovers.len(), 1, "only the target file should remain");
+        assert_eq!(leftovers[0], "profiles.toml");
+    }
+
+    #[test]
+    fn write_atomic_failed_rename_does_not_corrupt_existing_target() {
+        // Simulate a rename failure by making `target` a non-empty directory:
+        // std::fs::rename(file, dir) fails on Unix, so the original directory
+        // (and any sibling content) must be left intact.
+        let tmp = tempdir();
+        let target = tmp.path().join("profiles.toml");
+        std::fs::create_dir(&target).unwrap();
+        let canary = target.join("canary.txt");
+        std::fs::write(&canary, "still here").unwrap();
+
+        let err = write_atomic(&target, "new").unwrap_err();
+        assert!(
+            format!("{err:#}").contains("failed to rename"),
+            "expected rename error, got {err:#}"
+        );
+        assert_eq!(std::fs::read_to_string(&canary).unwrap(), "still here");
+        let siblings: Vec<_> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(
+            siblings.len(),
+            1,
+            "no temp file should be left behind on failure"
+        );
     }
 
     /** RAII temp dir to avoid pulling in the `tempfile` crate; removes itself on drop. */

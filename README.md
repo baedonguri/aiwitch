@@ -178,6 +178,31 @@ aiwitch use work
 aiwitch current   # → work
 ```
 
+### Remove a profile
+
+```sh
+aiwitch remove personal               # forget the profile, keep the home dir
+aiwitch remove personal --purge       # also delete the default home dir
+```
+
+`aiwitch remove` deletes the entry from `~/.config/aiwitch/profiles.toml`. Without `--purge`, the per-profile home directory (e.g. `~/.codex-personal`) is preserved so credentials stay recoverable. With `--purge`, `aiwitch` deletes the directory **only** when it matches the default `~/.codex-<name>` / `~/.claude-<name>` pattern; custom paths and symlinks are rejected with a `rm -rf <path>` hint so the tool never deletes a directory it didn't create.
+
+If `AIWITCH_CURRENT` in your shell still points at the removed profile, you'll see a stderr warning. Start a new shell or run `aiwitch use <other>` to switch.
+
+> **Note:** `aiwitch remove` rewrites `profiles.toml` via serde, so any custom comments, blank lines, or key ordering you added by hand are normalized away.
+
+### Rename a profile
+
+```sh
+aiwitch rename work office
+```
+
+Updates the entry name in `profiles.toml`. When the profile uses the default `~/.codex-<name>` / `~/.claude-<name>` home directory, the directory on disk is also moved to `~/.codex-<new>` / `~/.claude-<new>`. Custom `home_dir` paths are left untouched — rename them yourself if you want.
+
+If the new home_dir already exists, the rename aborts before any change. Cross-filesystem renames (`EXDEV`) are rejected with an explicit hint — move the directory onto the same filesystem and retry. If `AIWITCH_CURRENT` still points at the old name, you'll see a stderr warning; re-run `aiwitch use <new>` to refresh the current shell.
+
+> **Note:** Like `remove`, `rename` re-serializes `profiles.toml`, so handwritten comments and formatting in that file are lost. If `home_dir` is a symlink, `aiwitch` moves the symlink itself — the underlying directory stays put — and prints a stderr warning so you notice.
+
 ### Run a one-off command under a profile
 
 `aiwitch run <profile> -- <cmd>` spawns `<cmd>` with the profile's provider env vars set, without mutating the current shell. The `--` separator is recommended so flags are passed to the child instead of consumed by `aiwitch`.
