@@ -199,6 +199,14 @@ env -i HOME="$HOME" PATH="$PATH" aiwitch run work -- codex   # nuke everything e
 
 The exit code of `<cmd>` is propagated; on Unix, signal-terminated children are reported as `128 + signal`.
 
+### Diagnose health
+
+```sh
+aiwitch doctor
+```
+
+Reports per-profile status (home dir, login, token expiry) and global checks (provider CLI on `PATH`, `AIWITCH_CURRENT`). Exits non-zero on any `[err]`; warnings don't affect the exit code.
+
 ### Login
 
 ```sh

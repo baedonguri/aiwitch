@@ -105,7 +105,7 @@ impl Backend for ClaudeBackend {
     }
 }
 
-fn timestamp_to_datetime(value: i64) -> Option<DateTime<Utc>> {
+pub(crate) fn timestamp_to_datetime(value: i64) -> Option<DateTime<Utc>> {
     if value.abs() >= MS_THRESHOLD {
         DateTime::<Utc>::from_timestamp_millis(value)
     } else {
