@@ -6,8 +6,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.3.0] — 2026-05-10
+
 ### Added
 - **`aiwitch doctor`** — diagnose profile health. Walks each profile and checks home dir existence, login state, and token expiry; globally checks provider CLIs on `PATH` and `AIWITCH_CURRENT` validity. Exits non-zero on `[err]` so it can gate CI.
+- **`aiwitch remove <profile> [--purge]`** — drop a profile entry from `profiles.toml`. Without `--purge` the per-profile home directory is preserved so credentials stay recoverable. With `--purge` the directory is deleted **only** when it matches the default `~/.codex-<name>` / `~/.claude-<name>` pattern; custom paths and symlinks are rejected with an `rm -rf` hint so the tool never deletes a directory it didn't create. Emits a stderr warning when `AIWITCH_CURRENT` still points at the removed name.
+- **`aiwitch rename <old> <new>`** — rename a profile entry. When `home_dir` uses the default pattern, the directory on disk is also moved to `~/.codex-<new>` / `~/.claude-<new>`; custom paths are left untouched. Cross-filesystem renames (`EXDEV`) are rejected with an actionable hint, and a symlinked `home_dir` triggers a stderr warning since `fs::rename` moves the link rather than its target. If the target directory already exists, the command aborts before any change.
+
+### Changed
+- All writes to `profiles.toml` now go through a shared `store::write_atomic` helper (sibling tmpfile + atomic rename in the same parent directory). `aiwitch add` was migrated onto the same helper for consistency.
 
 ## [v0.2.0] — 2026-05-08
 
@@ -40,5 +47,6 @@ Initial public release.
 - Lint baseline: `rustfmt`, `clippy` with `pedantic` warn + curated allows, `unsafe_code = "deny"` with one localized `allow` for volatile secret zeroing.
 - CI on GitHub Actions: `fmt`, `clippy`, matrix `test` (ubuntu, macos), and `doc` jobs. `clippy`/`test`/`doc`/release build run `--locked`; `clippy`/`test`/`doc`/release build run `--all-features`; `doc` enforces `RUSTDOCFLAGS=-D warnings`.
 
+[v0.3.0]: https://github.com/baedonguri/aiwitch/compare/v0.2.0...v0.3.0
 [v0.2.0]: https://github.com/baedonguri/aiwitch/compare/v0.1.0...v0.2.0
 [v0.1.0]: https://github.com/baedonguri/aiwitch/releases/tag/v0.1.0
