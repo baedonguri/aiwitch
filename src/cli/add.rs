@@ -189,10 +189,6 @@ fn add_to_config_with_auth(
     let updated =
         add_profile_to_text_in(existing.as_deref(), home_base, provider, profile, &home_dir)?;
 
-    if let Some(parent) = config_path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create {}", parent.display()))?;
-    }
     let expanded_home = store::expand_home_dir_in(Path::new(&home_dir), home_base)?;
     std::fs::create_dir_all(&expanded_home)
         .with_context(|| format!("failed to create {}", expanded_home.display()))?;
@@ -207,8 +203,7 @@ fn add_to_config_with_auth(
             auth_mode: auth.map(Into::into),
         },
     )?;
-    std::fs::write(config_path, updated)
-        .with_context(|| format!("failed to write {}", config_path.display()))?;
+    store::write_atomic(config_path, &updated)?;
 
     Ok(AddOutcome {
         profile: profile.to_string(),
