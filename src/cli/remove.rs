@@ -1,4 +1,6 @@
 use crate::backend::BackendKind;
+#[cfg(target_os = "macos")]
+use crate::backend::claude;
 use crate::error::{Context, Result};
 use crate::profile::{ProfilesFile, store};
 use anyhow::anyhow;
@@ -30,6 +32,13 @@ pub fn run(profile: &str, purge: bool) -> Result<()> {
     if let Some(path) = &outcome.purged {
         writeln!(stdout, "purged: {}", path.display())?;
     }
+    match &outcome.keychain {
+        KeychainReport::Deleted(service) => writeln!(stdout, "purged keychain: {service}")?,
+        KeychainReport::Failed(service) => eprintln!(
+            "warning: profile removed but keychain entry was not deleted;\n         run `security delete-generic-password -s \"{service}\"` to remove it"
+        ),
+        KeychainReport::NotAttempted | KeychainReport::Skipped => {}
+    }
     Ok(())
 }
 
@@ -37,7 +46,22 @@ pub fn run(profile: &str, purge: bool) -> Result<()> {
 pub struct RemoveOutcome {
     pub name: String,
     pub purged: Option<PathBuf>,
+    pub keychain: KeychainReport,
     pub was_active: bool,
+}
+
+/** Result of cleaning up a profile's macOS Keychain credential during `--purge`.
+ *  Best-effort: `Failed` never aborts the `remove`. Off-macOS only `NotAttempted`
+ *  is constructed, so the other variants are allowed to be dead there. */
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+#[derive(Debug, PartialEq, Eq)]
+pub enum KeychainReport {
+    /** Not macOS, not claude, no `--purge`, or the default-dir safety guard. */
+    NotAttempted,
+    Deleted(String),
+    /** No verifiable Claude entry to delete (absent, or read-back did not parse). */
+    Skipped,
+    Failed(String),
 }
 
 #[derive(Debug)]
@@ -68,25 +92,68 @@ pub fn remove_profile(
     let removal = remove_profile_from_text(&existing_text, name)?;
     store::write_atomic(config_path, &removal.updated_text)?;
 
-    let purged = if purge {
+    let (purged, keychain) = if purge {
         let resolved = store::expand_home_dir_in(Path::new(&removal.raw_home), home_base)?;
-        Some(
+        let path =
             purge_home_dir(home_base, removal.backend, name, &resolved).with_context(|| {
                 format!(
                     "profile {name:?} was removed from {}, but home_dir was not purged",
                     config_path.display()
                 )
-            })?,
-        )
+            })?;
+        // Last step: only after the dir is gone do we touch the Keychain, and
+        // its failure is the sole best-effort point (never aborts `remove`).
+        let report = keychain_cleanup(removal.backend, &resolved, home_base);
+        (Some(path), report)
     } else {
-        None
+        (None, KeychainReport::NotAttempted)
     };
 
     Ok(RemoveOutcome {
         name: name.to_string(),
         purged,
+        keychain,
         was_active: env_current == Some(name),
     })
+}
+
+/** Deletes the profile's macOS Keychain credential after a verified read-back.
+ *  `NotAttempted` for non-claude or the default `~/.claude` dir (whose unsuffixed
+ *  entry is the user's main account and must never be touched). */
+#[cfg(target_os = "macos")]
+fn keychain_cleanup(backend: BackendKind, resolved: &Path, home_base: &Path) -> KeychainReport {
+    if backend != BackendKind::Claude {
+        return KeychainReport::NotAttempted;
+    }
+    let Some(service) = claude::keychain::keychain_target(resolved, home_base) else {
+        return KeychainReport::NotAttempted;
+    };
+    match claude::keychain::delete_verified(&service) {
+        claude::keychain::DeleteOutcome::Deleted => KeychainReport::Deleted(service),
+        claude::keychain::DeleteOutcome::Skipped => KeychainReport::Skipped,
+        claude::keychain::DeleteOutcome::Failed => KeychainReport::Failed(service),
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn keychain_cleanup(_backend: BackendKind, _resolved: &Path, _home_base: &Path) -> KeychainReport {
+    KeychainReport::NotAttempted
+}
+
+/** Hint suffix telling the user to manually remove a Claude Keychain entry that
+ *  a refused purge leaves behind. Empty unless macOS + claude + a non-default dir. */
+fn keychain_manual_hint(backend: BackendKind, resolved: &Path, home_base: &Path) -> String {
+    #[cfg(target_os = "macos")]
+    if backend == BackendKind::Claude {
+        if let Some(service) = claude::keychain::keychain_target(resolved, home_base) {
+            return format!(
+                "\nhint: a Claude keychain entry may also remain; run `security delete-generic-password -s \"{service}\"` to remove it"
+            );
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = (backend, resolved, home_base);
+    String::new()
 }
 
 pub fn remove_profile_from_text(existing: &str, name: &str) -> Result<RemoveTextOutcome> {
@@ -147,19 +214,22 @@ fn purge_home_dir(
         BackendKind::Claude => "claude",
     };
     let default = home_base.join(format!(".{prefix}-{name}"));
+    let kc_hint = keychain_manual_hint(backend, resolved, home_base);
     if resolved != default {
         return Err(anyhow!(
-            "refusing to purge custom home_dir {}\nhint: run `rm -rf {}` manually if you want to delete it",
+            "refusing to purge custom home_dir {}\nhint: run `rm -rf {}` manually if you want to delete it{}",
             resolved.display(),
             resolved.display(),
+            kc_hint,
         ));
     }
 
     match std::fs::symlink_metadata(resolved) {
         Ok(m) if m.file_type().is_symlink() => Err(anyhow!(
-            "refusing to follow symlink home_dir {}\nhint: run `rm -f {}` manually",
+            "refusing to follow symlink home_dir {}\nhint: run `rm -f {}` manually{}",
             resolved.display(),
             resolved.display(),
+            kc_hint,
         )),
         Ok(_) => {
             std::fs::remove_dir_all(resolved)
@@ -179,6 +249,44 @@ mod tests {
 
     const CODEX: BackendKind = BackendKind::Codex;
     const CLAUDE: BackendKind = BackendKind::Claude;
+
+    #[test]
+    fn keychain_cleanup_not_attempted_for_codex() {
+        let home = Path::new("/Users/x");
+        let resolved = home.join(".codex-work");
+        assert_eq!(
+            keychain_cleanup(CODEX, &resolved, home),
+            KeychainReport::NotAttempted
+        );
+    }
+
+    #[test]
+    fn keychain_cleanup_not_attempted_for_default_claude_dir() {
+        // resolved == $HOME/.claude → the unsuffixed main-account entry; the
+        // safety guard must refuse to touch the Keychain at all.
+        let home = Path::new("/Users/x");
+        let resolved = home.join(".claude");
+        assert_eq!(
+            keychain_cleanup(CLAUDE, &resolved, home),
+            KeychainReport::NotAttempted
+        );
+    }
+
+    #[test]
+    fn keychain_manual_hint_empty_for_codex_and_default_claude() {
+        let home = Path::new("/Users/x");
+        assert!(keychain_manual_hint(CODEX, &home.join(".codex-work"), home).is_empty());
+        assert!(keychain_manual_hint(CLAUDE, &home.join(".claude"), home).is_empty());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn keychain_manual_hint_present_for_custom_claude_dir() {
+        let home = Path::new("/Users/x");
+        let hint = keychain_manual_hint(CLAUDE, &home.join(".claude-work"), home);
+        assert!(hint.contains("security delete-generic-password"));
+        assert!(hint.contains("Claude Code-credentials-"));
+    }
 
     #[test]
     fn remove_text_drops_entry_and_keeps_siblings() {

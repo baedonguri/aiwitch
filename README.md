@@ -140,7 +140,7 @@ Each provider picks up its account from a directory pointed to by an environment
 
 `aiwitch use <profile>` evaluates to `export <PROVIDER_VAR>=...` and `export AIWITCH_CURRENT=...` (or `set -gx` on fish). The next `codex` / `claude` invocation picks up the right account; `aiwitch current` reads `AIWITCH_CURRENT`. No background daemon, no symlink swapping, no global state to corrupt.
 
-> **macOS note for Claude profiles**: Claude Code stores OAuth credentials in the system Keychain on macOS, not inside `CLAUDE_CONFIG_DIR`. `aiwitch list` will show `email=-`, `plan=-`, `expires=-` for Claude profiles even after a successful login — that's expected, not a bug. On Linux, `CLAUDE_CONFIG_DIR/.credentials.json` is parsed best-effort.
+> **macOS note for Claude profiles**: Claude Code stores OAuth credentials in the system Keychain on macOS (under `Claude Code-credentials-<hash of CLAUDE_CONFIG_DIR>`), not inside `CLAUDE_CONFIG_DIR`. `aiwitch list` stays fast and Keychain-free, so it shows `email=-`, `plan=-`, `expires=-` for Claude profiles — that's expected, not a bug. `aiwitch doctor` reads the Keychain entry to report **plan and token expiry** (it may prompt for Keychain access on first use; click *Always Allow*; `email` is never stored in the blob). `aiwitch remove <p> --purge` also deletes that Keychain entry after a verified read-back — the default `~/.claude` (main account) entry is never touched. On Linux, `CLAUDE_CONFIG_DIR/.credentials.json` is parsed best-effort for all of the above.
 
 ## Usage
 
