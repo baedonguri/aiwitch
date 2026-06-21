@@ -6,6 +6,11 @@
 //! for the default `~/.claude`. This naming is undocumented; all coupling to it
 //! lives in this module. Every entry point is best-effort — callers must tolerate
 //! failure and fall back to current behavior.
+//!
+//! The whole module targets macOS; on other platforms its items are compiled but
+//! unused (callers gate Keychain access behind `cfg(target_os = "macos")`), so
+//! dead-code is allowed off-macOS to keep `-D warnings` builds green.
+#![cfg_attr(not(target_os = "macos"), allow(dead_code))]
 
 use super::auth;
 use crate::backend::ProfileMeta;

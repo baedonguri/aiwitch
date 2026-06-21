@@ -1,4 +1,5 @@
 use crate::backend::BackendKind;
+#[cfg(target_os = "macos")]
 use crate::backend::claude;
 use crate::error::{Context, Result};
 use crate::profile::{ProfilesFile, store};
@@ -50,7 +51,9 @@ pub struct RemoveOutcome {
 }
 
 /** Result of cleaning up a profile's macOS Keychain credential during `--purge`.
- *  Best-effort: `Failed` never aborts the `remove`. */
+ *  Best-effort: `Failed` never aborts the `remove`. Off-macOS only `NotAttempted`
+ *  is constructed, so the other variants are allowed to be dead there. */
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 #[derive(Debug, PartialEq, Eq)]
 pub enum KeychainReport {
     /** Not macOS, not claude, no `--purge`, or the default-dir safety guard. */
