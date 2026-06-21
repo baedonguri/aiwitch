@@ -189,6 +189,28 @@ mod tests {
     }
 
     #[test]
+    fn claude_row_without_file_creds_renders_dashes() {
+        // Regression: `list` never reads the macOS Keychain, so a claude profile
+        // with no `.credentials.json` shows `-` for EMAIL/PLAN/EXPIRES (enrichment
+        // is doctor-only). Guards against accidentally wiring keychain into list.
+        let claude = Profile {
+            name: "work".to_string(),
+            backend: BackendKind::Claude,
+            home_dir: PathBuf::from("/abs/.claude-work"),
+        };
+        let rows = [(claude, ProfileMeta::default())];
+        let out = render(&rows, &[]);
+        let data_line = out.lines().nth(2).unwrap();
+        let cells: Vec<&str> = data_line.split('|').map(str::trim).collect();
+        // NAME | PROVIDER | EMAIL | PLAN | EXPIRES | CURRENT
+        assert_eq!(cells[0], "work");
+        assert_eq!(cells[1], "claude");
+        assert_eq!(cells[2], "-", "EMAIL stays `-` (no keychain read)");
+        assert_eq!(cells[3], "-", "PLAN stays `-` (no keychain read)");
+        assert_eq!(cells[4], "-", "EXPIRES stays `-` (no keychain read)");
+    }
+
+    #[test]
     fn render_current_marker_after_expires() {
         let rows = [
             (profile("personal"), ProfileMeta::default()),
