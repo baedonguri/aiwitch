@@ -6,6 +6,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **macOS Keychain support for Claude profiles.** `aiwitch doctor` now reads the per-profile Keychain entry (`Claude Code-credentials-<sha256(CLAUDE_CONFIG_DIR)[:8]>`) to report **plan and token expiry** on macOS, distinguishing "not logged in" (no entry) from "keychain access denied". `aiwitch remove <p> --purge` also deletes that Keychain entry, after a read-back verifies it parses as a Claude OAuth blob. All Keychain naming/coupling is isolated in `backend::claude::keychain` and every access is best-effort.
+
+### Changed
+- `aiwitch list` is unchanged on macOS (stays Keychain-free for speed; Claude rows still show `-`); enrichment is `doctor`-only.
+
+### Security
+- The default `~/.claude` (main-account) Keychain entry is never read or deleted: a path-equality guard (`resolved == $HOME/.claude`) skips it, and `--purge` performs a read-before-delete identity check so a hash collision or a changed naming scheme can never delete an unrelated entry.
+
 ## [v0.3.0] — 2026-05-10
 
 ### Added

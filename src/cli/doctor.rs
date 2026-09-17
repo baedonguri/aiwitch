@@ -53,6 +53,11 @@ pub struct ProfileFacts {
      *  An "all-None" `ProfileMeta` means the file parsed but contained no
      *  usable session (e.g. post-logout `auth.json` with `tokens: null`). */
     pub meta: Option<ProfileMeta>,
+    /** macOS Claude credentials read from the Keychain. `NotApplicable` on
+     *  non-macOS, non-claude, or the default `~/.claude` dir — in which case the
+     *  file-based `meta` path above applies instead. Injected by `collect_facts`
+     *  so `build_report` stays pure. */
+    pub keychain: claude::keychain::KeychainStatus,
 }
 
 /** Inputs not tied to a single profile. `*_cli_on_path = None` means no
@@ -136,6 +141,32 @@ fn claude_profile_check(
     globals: &GlobalFacts,
     now: DateTime<Utc>,
 ) -> Check {
+    use claude::keychain::KeychainStatus;
+    // On macOS the OAuth blob lives in the Keychain; `collect_facts` reads it
+    // into `f.keychain`. `NotApplicable` means the file-based path below applies.
+    match &f.keychain {
+        KeychainStatus::Found(meta) => return auth_meta_check(subject, meta, now, &f.profile.name),
+        KeychainStatus::NotFound => {
+            return Check {
+                status: Status::Warn,
+                subject,
+                detail: format!(
+                    "not logged in (run `aiwitch login {}` and use `/login`)",
+                    f.profile.name
+                ),
+            };
+        }
+        KeychainStatus::Denied => {
+            return Check {
+                status: Status::Warn,
+                subject,
+                detail: "keychain access unavailable (allow access, or verify with `claude`)"
+                    .to_string(),
+            };
+        }
+        KeychainStatus::NotApplicable => {}
+    }
+
     if !f.credentials_present {
         let detail = if globals.is_macos {
             "metadata unavailable (macOS keychain — verify with `claude` if needed)".to_string()
@@ -326,12 +357,40 @@ fn collect_facts(profile: &Profile) -> ProfileFacts {
     } else {
         None
     };
+    let keychain = if home_exists {
+        collect_keychain_status(profile)
+    } else {
+        claude::keychain::KeychainStatus::NotApplicable
+    };
     ProfileFacts {
         profile: profile.clone(),
         home_exists,
         credentials_present,
         meta,
+        keychain,
     }
+}
+
+/** Reads the macOS Keychain entry for a Claude profile (the impure edge).
+ *  `NotApplicable` for non-claude or the default `~/.claude` dir. */
+#[cfg(target_os = "macos")]
+fn collect_keychain_status(profile: &Profile) -> claude::keychain::KeychainStatus {
+    use claude::keychain::{self, KeychainStatus};
+    if profile.backend != BackendKind::Claude {
+        return KeychainStatus::NotApplicable;
+    }
+    let Ok(home) = std::env::var("HOME") else {
+        return KeychainStatus::NotApplicable;
+    };
+    match keychain::keychain_target(&profile.home_dir, std::path::Path::new(&home)) {
+        Some(service) => keychain::read_status(&service),
+        None => KeychainStatus::NotApplicable,
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn collect_keychain_status(_profile: &Profile) -> claude::keychain::KeychainStatus {
+    claude::keychain::KeychainStatus::NotApplicable
 }
 
 fn collect_globals(profiles: &[Profile], env: &impl EnvLookup) -> GlobalFacts {
@@ -410,6 +469,7 @@ mod tests {
             profile: profile(name, kind, &format!("/abs/{name}")),
             home_exists: true,
             credentials_present: true,
+            keychain: claude::keychain::KeychainStatus::NotApplicable,
             meta: Some(ProfileMeta {
                 email: Some("u@e.com".into()),
                 plan: Some("plus".into()),
@@ -458,6 +518,7 @@ mod tests {
             profile: profile("p", BackendKind::Codex, "/abs/p"),
             home_exists: false,
             credentials_present: false,
+            keychain: claude::keychain::KeychainStatus::NotApplicable,
             meta: None,
         };
         let r = build_report(&[f], &empty_globals(), now());
@@ -472,6 +533,7 @@ mod tests {
             profile: profile("work", BackendKind::Codex, "/abs/work"),
             home_exists: true,
             credentials_present: false,
+            keychain: claude::keychain::KeychainStatus::NotApplicable,
             meta: None,
         };
         let r = build_report(&[f], &empty_globals(), now());
@@ -486,6 +548,7 @@ mod tests {
             profile: profile("p", BackendKind::Codex, "/abs/p"),
             home_exists: true,
             credentials_present: true,
+            keychain: claude::keychain::KeychainStatus::NotApplicable,
             meta: None,
         };
         let r = build_report(&[f], &empty_globals(), now());
@@ -499,11 +562,67 @@ mod tests {
             profile: profile("p", BackendKind::Codex, "/abs/p"),
             home_exists: true,
             credentials_present: true,
+            keychain: claude::keychain::KeychainStatus::NotApplicable,
             meta: Some(ProfileMeta::default()),
         };
         let r = build_report(&[f], &empty_globals(), now());
         assert_eq!(r.checks[0].status, Status::Warn);
         assert!(r.checks[0].detail.contains("no usable session"));
+    }
+
+    fn claude_keychain_facts(status: claude::keychain::KeychainStatus) -> ProfileFacts {
+        ProfileFacts {
+            profile: profile("work", BackendKind::Claude, "/abs/.claude-work"),
+            home_exists: true,
+            credentials_present: false, // macOS: no .credentials.json file
+            keychain: status,
+            meta: None,
+        }
+    }
+
+    #[test]
+    fn keychain_found_shows_plan_and_expiry() {
+        use claude::keychain::KeychainStatus;
+        let meta = ProfileMeta {
+            email: None, // never present in the keychain blob
+            plan: Some("max".into()),
+            subscription_until: Some(Utc.with_ymd_and_hms(2027, 1, 1, 0, 0, 0).unwrap()),
+        };
+        let r = build_report(
+            &[claude_keychain_facts(KeychainStatus::Found(meta))],
+            &empty_globals(),
+            now(),
+        );
+        assert_eq!(r.checks[0].status, Status::Ok);
+        assert!(r.checks[0].detail.contains("max"));
+        assert!(r.checks[0].detail.contains("2027-01-01"));
+    }
+
+    #[test]
+    fn keychain_not_found_is_not_logged_in_warning() {
+        use claude::keychain::KeychainStatus;
+        let r = build_report(
+            &[claude_keychain_facts(KeychainStatus::NotFound)],
+            &empty_globals(),
+            now(),
+        );
+        assert_eq!(r.checks[0].status, Status::Warn);
+        assert!(r.checks[0].detail.contains("not logged in"));
+    }
+
+    #[test]
+    fn keychain_denied_is_distinct_from_not_logged_in() {
+        use claude::keychain::KeychainStatus;
+        let r = build_report(
+            &[claude_keychain_facts(KeychainStatus::Denied)],
+            &empty_globals(),
+            now(),
+        );
+        assert_eq!(r.checks[0].status, Status::Warn);
+        assert!(r.checks[0].detail.contains("keychain access"));
+        // Must NOT mislabel a denial as not-logged-in / suggest login.
+        assert!(!r.checks[0].detail.contains("not logged in"));
+        assert!(!r.checks[0].detail.contains("aiwitch login"));
     }
 
     #[test]
@@ -555,6 +674,7 @@ mod tests {
             profile: profile("p", BackendKind::Claude, "/abs/p"),
             home_exists: true,
             credentials_present: false,
+            keychain: claude::keychain::KeychainStatus::NotApplicable,
             meta: None,
         };
         let g = GlobalFacts {
@@ -572,6 +692,7 @@ mod tests {
             profile: profile("p", BackendKind::Claude, "/abs/p"),
             home_exists: true,
             credentials_present: false,
+            keychain: claude::keychain::KeychainStatus::NotApplicable,
             meta: None,
         };
         let g = GlobalFacts {
@@ -700,6 +821,7 @@ mod tests {
             profile: profile("p", BackendKind::Claude, "/abs/p"),
             home_exists: true,
             credentials_present: true,
+            keychain: claude::keychain::KeychainStatus::NotApplicable,
             meta: None,
         };
         let r = build_report(&[f], &empty_globals(), now());

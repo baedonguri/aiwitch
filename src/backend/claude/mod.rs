@@ -5,6 +5,7 @@ use anyhow::{anyhow, bail, ensure};
 use chrono::{DateTime, Utc};
 
 pub mod auth;
+pub mod keychain;
 
 pub struct ClaudeBackend;
 
